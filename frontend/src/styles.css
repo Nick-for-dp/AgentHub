@@ -1,0 +1,159 @@
+/* ===== Design Tokens ===== */
+:root {
+  /* Primary brand */
+  --color-primary: #007ACC;
+  --color-primary-hover: #005A9E;
+  --color-primary-active: #005A9E;
+  --color-primary-bg: #EAF5FF;
+  --color-primary-border: #BBDFFF;
+
+  /* Backgrounds */
+  --color-bg-page: #F5F7FA;
+  --color-bg-white: #FFFFFF;
+
+  /* Text */
+  --color-text-primary: #1F2937;
+  --color-text-secondary: #64748B;
+  --color-text-tertiary: #94A3B8;
+
+  /* Borders */
+  --color-border: #E5E7EB;
+
+  /* Semantic */
+  --color-success: #16A34A;
+  --color-warning: #D97706;
+  --color-error: #DC2626;
+
+  /* Code / Markdown */
+  --color-code-bg: #1E293B;
+  --color-code-text: #E2E8F0;
+  --color-code-inline-bg: #F1F5F9;
+  --color-table-header-bg: #F9FAFB;
+  --color-md-border: #E2E8F0;
+  --color-blockquote-border: #BBDFFF;
+
+  /* Typography */
+  --font-mono: 'Fira Code', 'Cascadia Code', Consolas, 'Source Code Pro', monospace;
+  --font-size-sm: 12px;
+  --font-size-base: 14px;
+  --font-size-lg: 16px;
+  --line-height-base: 1.5;
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  color: var(--color-text-primary);
+  background: var(--color-bg-page);
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 8px;
+
+  /* Controls */
+  --control-height-sm: 28px;
+  --control-height: 36px;
+  --control-height-lg: 40px;
+  --control-padding-x: 12px;
+  --control-padding-x-sm: 8px;
+  --control-padding-x-lg: 14px;
+
+  /* Layout */
+  --sider-width: 220px;
+  --header-height: 56px;
+  --content-max-width: 1040px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-base);
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.page-shell {
+  min-height: 100vh;
+  background: var(--color-bg-page);
+}
+
+.page-content {
+  width: min(1180px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 24px 0;
+}
+
+/* ===== Ant Design Vue Control Baseline ===== */
+body .ant-btn {
+  min-height: var(--control-height);
+  padding-inline: var(--control-padding-x);
+  border-radius: var(--radius);
+  font-size: var(--font-size-base);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+body .ant-btn-sm {
+  min-height: var(--control-height-sm);
+  padding-inline: var(--control-padding-x-sm);
+  font-size: var(--font-size-sm);
+}
+
+body .ant-btn-lg {
+  min-height: var(--control-height-lg);
+  padding-inline: var(--control-padding-x-lg);
+  font-size: var(--font-size-base);
+}
+
+body .ant-input,
+body .ant-input-affix-wrapper,
+body .ant-picker,
+body .ant-input-number,
+body .ant-select:not(.ant-select-customize-input) .ant-select-selector {
+  min-height: var(--control-height);
+  border-radius: var(--radius);
+  font-size: var(--font-size-base);
+}
+
+body .ant-input,
+body .ant-input-affix-wrapper {
+  padding-inline: var(--control-padding-x);
+}
+
+body textarea.ant-input {
+  min-height: auto;
+  padding: 8px var(--control-padding-x);
+  line-height: 1.55;
+}
+
+body .ant-input-lg,
+body .ant-input-affix-wrapper-lg {
+  min-height: var(--control-height-lg);
+  padding-inline: var(--control-padding-x-lg);
+  font-size: var(--font-size-base);
+}
+
+body .ant-select-single .ant-select-selector,
+body .ant-picker,
+body .ant-input-number {
+  display: flex;
+  align-items: center;
+}
+
+body .ant-tag {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  line-height: 1;
+}
+
+body .ant-form-item {
+  margin-bottom: 18px;
+}
