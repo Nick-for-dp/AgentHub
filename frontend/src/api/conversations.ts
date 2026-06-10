@@ -36,6 +36,13 @@ export interface ConversationWithMessages {
   messages: ConversationMessage[]
 }
 
+export interface ConversationPage {
+  items: Conversation[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export async function getCurrentConversation(agentCode: string): Promise<ConversationWithMessages> {
   const { data } = await http.get<APIResponse<ConversationWithMessages>>('/conversations/current', {
     params: { agent_code: agentCode },
@@ -63,9 +70,24 @@ export async function getConversationMessages(conversationId: string): Promise<C
   return data.data
 }
 
+export async function listConversations(
+  agentCode?: string,
+  page = 1,
+  pageSize = 50,
+): Promise<ConversationPage> {
+  const { data } = await http.get<APIResponse<ConversationPage>>('/conversations', {
+    params: { agent_code: agentCode, page, page_size: pageSize },
+  })
+  return data.data
+}
+
 export async function archiveConversation(conversationId: string): Promise<Conversation> {
   const { data } = await http.patch<APIResponse<Conversation>>(`/conversations/${conversationId}`, {
     status: 'ARCHIVED',
   })
   return data.data
+}
+
+export async function deleteConversation(conversationId: string): Promise<void> {
+  await http.delete<APIResponse<null>>(`/conversations/${conversationId}`)
 }

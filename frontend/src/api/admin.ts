@@ -7,12 +7,15 @@
 import { http } from './http'
 import type {
   Agent,
+  AgentBusinessFollowupPage,
   AgentCreate,
   AgentKnowledgeBaseBind,
   AgentUpdate,
+  AnalyticsFilter,
   APIKeyIssued,
   APIKeyRecord,
   APIResponse,
+  DAUItem,
   DocumentCreate,
   DocumentRead,
   InvocationRecordFilter,
@@ -22,6 +25,8 @@ import type {
   OrgUnit,
   SalesLeadFilter,
   SalesLeadPage,
+  UserChatDurationPage,
+  UserMessageCountPage,
 } from './types'
 
 // ======================== Agents ========================
@@ -139,16 +144,59 @@ export async function listInvocationRecords(filter: InvocationRecordFilter = {})
 // ======================== Sales Leads ========================
 
 export async function listSalesLeads(filter: SalesLeadFilter = {}) {
-  const params: Record<string, string | number | boolean> = {}
+  const params: Record<string, string | number> = {}
   if (filter.keyword) params.keyword = filter.keyword
   if (filter.status) params.status = filter.status
-  if (filter.agent_code) params.agent_code = filter.agent_code
-  if (filter.region) params.region = filter.region
-  if (filter.has_contact !== undefined) params.has_contact = filter.has_contact
   if (filter.created_from) params.created_from = filter.created_from
   if (filter.created_to) params.created_to = filter.created_to
   if (filter.page) params.page = filter.page
   if (filter.page_size) params.page_size = filter.page_size
   const { data } = await http.get<APIResponse<SalesLeadPage>>('/admin/leads', { params })
+  return data.data
+}
+
+// ======================== Analytics ========================
+
+function _analyticsParams(filter: AnalyticsFilter): Record<string, string | number> {
+  const params: Record<string, string | number> = {}
+  if (filter.created_from) params.created_from = filter.created_from
+  if (filter.created_to) params.created_to = filter.created_to
+  if (filter.agent_code) params.agent_code = filter.agent_code
+  if (filter.user_id) params.user_id = filter.user_id
+  if (filter.org_unit_id) params.org_unit_id = filter.org_unit_id
+  if (filter.page) params.page = filter.page
+  if (filter.page_size) params.page_size = filter.page_size
+  return params
+}
+
+export async function fetchDailyActiveUsers(filter: AnalyticsFilter = {}) {
+  const { data } = await http.get<APIResponse<DAUItem[]>>(
+    '/admin/analytics/daily-active-users',
+    { params: _analyticsParams(filter) },
+  )
+  return data.data
+}
+
+export async function fetchUserMessageCounts(filter: AnalyticsFilter = {}) {
+  const { data } = await http.get<APIResponse<UserMessageCountPage>>(
+    '/admin/analytics/user-message-counts',
+    { params: _analyticsParams(filter) },
+  )
+  return data.data
+}
+
+export async function fetchUserChatDuration(filter: AnalyticsFilter = {}) {
+  const { data } = await http.get<APIResponse<UserChatDurationPage>>(
+    '/admin/analytics/user-chat-duration',
+    { params: _analyticsParams(filter) },
+  )
+  return data.data
+}
+
+export async function fetchAgentBusinessFollowups(filter: AnalyticsFilter = {}) {
+  const { data } = await http.get<APIResponse<AgentBusinessFollowupPage>>(
+    '/admin/analytics/agent-business-followups',
+    { params: _analyticsParams(filter) },
+  )
   return data.data
 }

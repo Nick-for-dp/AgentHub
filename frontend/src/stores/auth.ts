@@ -33,6 +33,7 @@ export const useAuthStore = defineStore('auth', () => {
   const isAccessExpired = computed(() => accessExpiresAt.value > 0 && Date.now() >= accessExpiresAt.value)
   const isAccessExpiringSoon = computed(() => shouldRefreshSession(DEFAULT_REFRESH_SKEW_MS))
   const isIdleExpired = computed(() => idleExpiresAt.value > 0 && Date.now() >= idleExpiresAt.value)
+  const defaultHomePath = computed(() => currentUser.value?.is_admin ? '/admin/agents' : '/chat')
 
   async function login(phone: string, password: string): Promise<void> {
     const resp = await apiLogin({ phone, password })
@@ -188,6 +189,7 @@ export const useAuthStore = defineStore('auth', () => {
     isAccessExpired,
     isAccessExpiringSoon,
     isIdleExpired,
+    defaultHomePath,
     login,
     restoreSession,
     doRefreshSession,

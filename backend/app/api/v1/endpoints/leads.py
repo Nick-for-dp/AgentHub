@@ -26,9 +26,6 @@ router = APIRouter()
 def list_sales_leads(
     keyword: str | None = Query(default=None, description="关键词，匹配需求、地区、联系人、公司、电话等"),
     status: LeadStatus | None = Query(default=None, description="线索状态"),
-    agent_code: str | None = Query(default=None, description="Agent code"),
-    region: str | None = Query(default=None, description="地域关键词"),
-    has_contact: bool | None = Query(default=None, description="是否已有联系方式"),
     created_from: datetime | None = Query(default=None, description="创建时间起始（ISO 8601）"),
     created_to: datetime | None = Query(default=None, description="创建时间截止（ISO 8601）"),
     page: int = Query(default=1, ge=1, description="页码，从 1 开始"),
@@ -38,9 +35,6 @@ def list_sales_leads(
     items, total = LeadRepository(db).list_sales_leads(
         keyword=keyword,
         status=status.value if status else None,
-        agent_code=agent_code,
-        region=region,
-        has_contact=has_contact,
         created_from=created_from,
         created_to=created_to,
         page=page,

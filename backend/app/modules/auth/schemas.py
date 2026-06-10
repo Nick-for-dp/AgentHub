@@ -101,6 +101,7 @@ class UserSummary(BaseModel):
     phone: str | None
     org_unit_id: str
     org_unit_name: str | None = None
+    is_admin: bool = False
 
 
 class SessionResponse(BaseModel):

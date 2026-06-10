@@ -25,29 +25,11 @@
             <span class="filter-label">关键词</span>
             <a-input v-model:value="filter.keyword" placeholder="需求、地区、公司、电话" allow-clear size="small" />
           </label>
-          <label class="filter-field filter-agent">
-            <span class="filter-label">智能体</span>
-            <a-input v-model:value="filter.agent_code" placeholder="Agent code" allow-clear size="small" />
-          </label>
-          <label class="filter-field filter-region">
-            <span class="filter-label">地域</span>
-            <a-input v-model:value="filter.region" placeholder="如 上海、广州" allow-clear size="small" />
-          </label>
           <label class="filter-field filter-status">
             <span class="filter-label">状态</span>
             <a-select
               v-model:value="filter.status"
               :options="statusOptions"
-              size="small"
-              style="width: 100%"
-              @change="search"
-            />
-          </label>
-          <label class="filter-field filter-contact">
-            <span class="filter-label">联系方式</span>
-            <a-select
-              v-model:value="filter.has_contact"
-              :options="contactOptions"
               size="small"
               style="width: 100%"
               @change="search"
@@ -65,12 +47,12 @@
             />
           </label>
           <label class="filter-field filter-date">
-            <span class="filter-label">截止时间</span>
+            <span class="filter-label">结束时间</span>
             <a-date-picker
               v-model:value="filter.created_to"
               show-time
               format="YYYY-MM-DD HH:mm:ss"
-              placeholder="截止时间"
+              placeholder="结束时间"
               allow-clear
               size="small"
             />
@@ -192,10 +174,7 @@ const leads = ref<SalesLead[]>([])
 
 const filter = reactive({
   keyword: '',
-  agent_code: '',
-  region: '',
   status: '',
-  has_contact: undefined as boolean | undefined,
   created_from: undefined as Dayjs | undefined,
   created_to: undefined as Dayjs | undefined,
   page: 1,
@@ -219,12 +198,6 @@ const statusOptions = [
   { label: '已完整', value: 'QUALIFIED' },
   { label: '已关闭', value: 'CLOSED' },
   { label: '已丢弃', value: 'DISCARDED' },
-]
-
-const contactOptions = [
-  { label: '全部', value: undefined },
-  { label: '已有联系方式', value: true },
-  { label: '缺联系方式', value: false },
 ]
 
 const columns = [
@@ -252,10 +225,7 @@ async function load() {
   try {
     const result = await listSalesLeads({
       keyword: filter.keyword || undefined,
-      agent_code: filter.agent_code || undefined,
-      region: filter.region || undefined,
       status: filter.status || undefined,
-      has_contact: filter.has_contact,
       created_from: toISOString(filter.created_from),
       created_to: toISOString(filter.created_to),
       page: filter.page,
@@ -284,10 +254,7 @@ function resetFilter() {
   detailVisible.value = false
   detail.value = null
   filter.keyword = ''
-  filter.agent_code = ''
-  filter.region = ''
   filter.status = ''
-  filter.has_contact = undefined
   filter.created_from = undefined
   filter.created_to = undefined
   filter.page = 1
@@ -364,10 +331,10 @@ onMounted(load)
 }
 .filter-form {
   display: grid;
-  grid-template-columns: 240px 170px 160px 150px 150px 214px 214px auto;
+  grid-template-columns: minmax(220px, 1.4fr) 150px 214px 214px auto;
   gap: 10px;
   align-items: center;
-  min-width: 1468px;
+  min-width: 0;
 }
 .filter-field {
   display: flex;
@@ -401,6 +368,14 @@ onMounted(load)
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+}
+@media (max-width: 1180px) {
+  .filter-form {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+  }
+  .filter-actions {
+    grid-column: 1 / -1;
+  }
 }
 .primary-cell {
   color: var(--color-text-primary);

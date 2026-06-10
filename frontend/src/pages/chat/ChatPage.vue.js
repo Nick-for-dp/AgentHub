@@ -1,13 +1,13 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { AudioOutlined, CheckCircleFilled, CloseCircleFilled, DownOutlined, LoadingOutlined, PauseCircleOutlined, PlusOutlined, RobotOutlined, SoundOutlined, } from '@ant-design/icons-vue';
+import { AudioOutlined, CheckCircleFilled, CloseCircleFilled, DeleteOutlined, DownOutlined, LoadingOutlined, MenuOutlined, PauseCircleOutlined, PlusOutlined, RobotOutlined, SoundOutlined, } from '@ant-design/icons-vue';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { streamChat } from '../../api/chat';
-import { archiveConversation, createConversation, getConversation, getConversationMessages, getCurrentConversation, } from '../../api/conversations';
+import { createConversation, deleteConversation, getConversation, getConversationMessages, getCurrentConversation, listConversations, } from '../../api/conversations';
 import { useAuthStore } from '../../stores/auth';
-import { useSpeechRecognition } from '../../composables/useSpeechRecognition';
-import { useSpeechSynthesis } from '../../composables/useSpeechSynthesis';
+import { useCloudSpeechRecognition } from '../../composables/useCloudSpeechRecognition';
+import { useCloudSpeechSynthesis } from '../../composables/useCloudSpeechSynthesis';
 // 配置 marked
 marked.setOptions({ breaks: true, gfm: true });
 // 配置 DOMPurify：链接安全策略
@@ -175,9 +175,28 @@ const thoughtOpen = ref(true);
 const expandedSteps = ref({});
 const conversationId = ref(null);
 const conversationTitle = ref('');
+const conversationList = ref([]);
+const loadingConversations = ref(false);
+const conversationPage = ref(1);
+const conversationTotal = ref(0);
+const conversationPageSize = 30;
+const switchingConversationId = ref(null);
+const deletingConversationId = ref(null);
+let switchRequestSeq = 0;
+const hasMoreConversations = computed(() => conversationList.value.length < conversationTotal.value);
+const windowWidth = ref(window.innerWidth);
+const isMobile = computed(() => windowWidth.value < 768);
+const sidebarVisible = ref(window.innerWidth >= 768);
 // 语音能力
-const speech = useSpeechRecognition();
-const synth = useSpeechSynthesis();
+const speech = useCloudSpeechRecognition();
+const synth = useCloudSpeechSynthesis();
+const speechPlaceholder = computed(() => {
+    if (speech.isRecording.value)
+        return '正在录音，松开发送识别';
+    if (speech.isTranscribing.value)
+        return '正在转写语音...';
+    return '输入问题，Enter 发送';
+});
 // 节点事件通常会在几十毫秒内连续到达。这里用前端队列把步骤逐个展示，
 // 同时保证每一步至少可见一小段时间，避免用户看到“一整串步骤瞬间出现”。
 const STEP_REVEAL_GAP_MS = 520;
@@ -196,6 +215,110 @@ function syncConversationUrl(id) {
     }
     void router.replace({ query });
 }
+function formatTime(isoString) {
+    const date = new Date(isoString);
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+    if (isToday) {
+        return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    }
+    return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+}
+function mergeConversationList(items, append) {
+    const existing = append ? conversationList.value : [];
+    const byId = new Map(existing.map(item => [item.id, item]));
+    for (const item of items) {
+        byId.set(item.id, item);
+    }
+    conversationList.value = Array.from(byId.values()).sort((a, b) => new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime());
+}
+async function loadConversationList(page = 1, append = false) {
+    if (!auth.isLoggedIn)
+        return;
+    loadingConversations.value = true;
+    try {
+        const result = await listConversations(agentCode.value, page, conversationPageSize);
+        conversationPage.value = result.page;
+        conversationTotal.value = result.total;
+        mergeConversationList(result.items, append);
+    }
+    catch {
+        // 静默失败，不影响聊天主体验
+    }
+    finally {
+        loadingConversations.value = false;
+    }
+}
+async function refreshConversationList() {
+    await loadConversationList(1, false);
+}
+async function loadMoreConversations() {
+    if (loadingConversations.value || !hasMoreConversations.value)
+        return;
+    await loadConversationList(conversationPage.value + 1, true);
+}
+async function deleteConversationItem(id) {
+    if (deletingConversationId.value || loading.value)
+        return;
+    deletingConversationId.value = id;
+    errorMsg.value = '';
+    try {
+        await deleteConversation(id);
+        conversationList.value = conversationList.value.filter(item => item.id !== id);
+        conversationTotal.value = Math.max(0, conversationTotal.value - 1);
+        if (conversationId.value === id) {
+            conversationId.value = null;
+            conversationTitle.value = '';
+            messages.value = [];
+            expandedSteps.value = {};
+            syncConversationUrl(null);
+        }
+    }
+    catch {
+        errorMsg.value = '删除会话失败，请稍后重试';
+    }
+    finally {
+        deletingConversationId.value = null;
+    }
+}
+async function switchConversation(id) {
+    if (id === conversationId.value || loading.value)
+        return;
+    const requestSeq = ++switchRequestSeq;
+    switchingConversationId.value = id;
+    errorMsg.value = '';
+    if (isMobile.value) {
+        sidebarVisible.value = false;
+    }
+    try {
+        const [conversation, storedMessages] = await Promise.all([
+            getConversation(id),
+            getConversationMessages(id),
+        ]);
+        if (requestSeq !== switchRequestSeq)
+            return;
+        if (conversation.agent_code !== agentCode.value) {
+            throw new Error('conversation agent mismatch');
+        }
+        conversationId.value = conversation.id;
+        conversationTitle.value = conversation.title;
+        messages.value = storedMessages
+            .map(mapConversationMessage)
+            .filter((item) => item !== null);
+        syncConversationUrl(conversation.id);
+        await scrollBottom();
+    }
+    catch {
+        if (requestSeq !== switchRequestSeq)
+            return;
+        errorMsg.value = '切换会话失败，请稍后重试';
+    }
+    finally {
+        if (requestSeq === switchRequestSeq) {
+            switchingConversationId.value = null;
+        }
+    }
+}
 async function restoreCurrentConversation() {
     if (!auth.isLoggedIn)
         return;
@@ -203,11 +326,17 @@ async function restoreCurrentConversation() {
     try {
         const routeConversationId = router.currentRoute.value.query.conversation_id;
         const requestedId = typeof routeConversationId === 'string' ? routeConversationId : null;
-        const currentState = requestedId ? null : await getCurrentConversation(agentCode.value);
-        const current = requestedId ? await getConversation(requestedId) : currentState?.conversation;
-        const storedMessages = requestedId
+        let currentState = requestedId ? null : await getCurrentConversation(agentCode.value);
+        let current = requestedId ? await getConversation(requestedId) : currentState?.conversation;
+        let storedMessages = requestedId
             ? await getConversationMessages(requestedId)
             : currentState?.messages ?? [];
+        if (current && current.agent_code !== agentCode.value) {
+            syncConversationUrl(null);
+            currentState = await getCurrentConversation(agentCode.value);
+            current = currentState.conversation;
+            storedMessages = currentState.messages;
+        }
         conversationId.value = current?.id ?? null;
         conversationTitle.value = current?.title ?? '';
         messages.value = storedMessages
@@ -227,14 +356,6 @@ async function handleNewConversation() {
     if (loading.value)
         return;
     errorMsg.value = '';
-    if (conversationId.value) {
-        try {
-            await archiveConversation(conversationId.value);
-        }
-        catch {
-            // 新对话体验优先，归档失败不阻断创建新上下文。
-        }
-    }
     const conversation = await createConversation(agentCode.value);
     conversationId.value = conversation.id;
     conversationTitle.value = conversation.title;
@@ -242,6 +363,10 @@ async function handleNewConversation() {
     expandedSteps.value = {};
     syncConversationUrl(conversation.id);
     await scrollBottom();
+    if (isMobile.value) {
+        sidebarVisible.value = false;
+    }
+    await refreshConversationList();
 }
 function scheduleStepTimer(callback, delayMs) {
     const timer = setTimeout(() => {
@@ -367,20 +492,42 @@ function enqueueStepUpdate(message, node, eventName) {
     });
     void drainStepQueue();
 }
-// 语音输入：将识别结果填入输入框，识别结束时可自动发送
-function toggleSpeechInput() {
-    if (speech.isListening.value) {
-        speech.stop();
-        // 识别结束后将文本写入输入框
-        if (speech.transcript.value) {
-            question.value = speech.transcript.value;
-            speech.clearTranscript();
-        }
-    }
-    else {
+// 语音输入：长按录音，松开后将云端识别结果填入输入框
+function startSpeechInput() {
+    if (speech.isRecording.value || speech.isTranscribing.value || !canChat.value)
+        return;
+    speech.clearTranscript();
+    void speech.start({
+        onEnd: (text) => {
+            void finishSpeechInput(text);
+        },
+        onError: (error) => {
+            errorMsg.value = getSpeechErrorMessage(error);
+        },
+    });
+}
+function stopSpeechInput() {
+    if (!speech.isRecording.value)
+        return;
+    void speech.stop();
+}
+function finishSpeechInput(text) {
+    const recognizedText = (text || speech.transcript.value).trim();
+    if (!recognizedText) {
         speech.clearTranscript();
-        speech.start();
+        return;
     }
+    question.value = recognizedText;
+    speech.clearTranscript();
+}
+function getSpeechErrorMessage(error) {
+    if (error.includes('Permission') || error.includes('NotAllowed')) {
+        return '浏览器未允许使用麦克风，请检查权限设置';
+    }
+    if (error.includes('uploaded WAV')) {
+        return '录音格式不符合要求，请重试';
+    }
+    return error || '语音输入失败，请重试';
 }
 // 语音播报：播放/停止
 function toggleSpeechOutput(text) {
@@ -388,7 +535,7 @@ function toggleSpeechOutput(text) {
         synth.stop();
     }
     else {
-        synth.speak(text);
+        void synth.speak(text);
     }
 }
 // 发送新问题时停止播报
@@ -447,10 +594,22 @@ function stopTypewriter() {
     }
     typewriterCursors.value.clear();
 }
+function onWindowResize() {
+    const wasMobile = isMobile.value;
+    windowWidth.value = window.innerWidth;
+    if (wasMobile && !isMobile.value) {
+        sidebarVisible.value = true;
+    }
+}
 onMounted(() => {
+    window.addEventListener('resize', onWindowResize);
     void restoreCurrentConversation();
+    if (auth.isLoggedIn) {
+        void refreshConversationList();
+    }
 });
 onUnmounted(() => {
+    window.removeEventListener('resize', onWindowResize);
     if (scrollTimer) {
         clearTimeout(scrollTimer);
         scrollTimer = null;
@@ -495,9 +654,11 @@ function scheduleScrollLatest(behavior = 'auto') {
 }
 // ── 发送消息 ───────────────────────────────
 async function send() {
-    const current = question.value.trim();
+    const current = (question.value || speech.transcript.value).trim();
     if (!current || loading.value || !canChat.value)
         return;
+    question.value = current;
+    speech.clearTranscript();
     errorMsg.value = '';
     thoughtOpen.value = true;
     const sessionReady = await auth.ensureFreshSessionForChat();
@@ -589,6 +750,13 @@ async function send() {
     finally {
         assistantMsg.isStreaming = false;
         loading.value = false;
+        if (auth.isLoggedIn) {
+            await refreshConversationList();
+            const currentConversation = conversationList.value.find(item => item.id === conversationId.value);
+            if (currentConversation) {
+                conversationTitle.value = currentConversation.title;
+            }
+        }
         await scrollBottom();
     }
 }
@@ -596,6 +764,22 @@ debugger; /* PartiallyEnd: #3632/scriptSetup.vue */
 const __VLS_ctx = {};
 let __VLS_components;
 let __VLS_directives;
+/** @type {__VLS_StyleScopedClasses['conversation-sidebar']} */ ;
+/** @type {__VLS_StyleScopedClasses['conversation-sidebar']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-collapsed']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-item']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-item']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-item']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-item']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-delete-btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-delete-btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-delete-btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-delete-btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-delete-btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-toggle-btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-toggle-btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['chat-panel']} */ ;
+/** @type {__VLS_StyleScopedClasses['chat-panel']} */ ;
 /** @type {__VLS_StyleScopedClasses['chat-header']} */ ;
 /** @type {__VLS_StyleScopedClasses['header-title']} */ ;
 /** @type {__VLS_StyleScopedClasses['header-icon-button']} */ ;
@@ -663,6 +847,8 @@ let __VLS_directives;
 /** @type {__VLS_StyleScopedClasses['composer']} */ ;
 /** @type {__VLS_StyleScopedClasses['composer']} */ ;
 /** @type {__VLS_StyleScopedClasses['chat-page']} */ ;
+/** @type {__VLS_StyleScopedClasses['conversation-sidebar']} */ ;
+/** @type {__VLS_StyleScopedClasses['conversation-sidebar']} */ ;
 /** @type {__VLS_StyleScopedClasses['chat-panel']} */ ;
 /** @type {__VLS_StyleScopedClasses['chat-header']} */ ;
 /** @type {__VLS_StyleScopedClasses['messages']} */ ;
@@ -681,8 +867,137 @@ let __VLS_directives;
 __VLS_asFunctionalElement(__VLS_intrinsicElements.main, __VLS_intrinsicElements.main)({
     ...{ class: "chat-page" },
 });
+if (__VLS_ctx.auth.isLoggedIn) {
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.aside, __VLS_intrinsicElements.aside)({
+        ...{ class: (['conversation-sidebar', {
+                    'sidebar-open': __VLS_ctx.sidebarVisible,
+                    'sidebar-collapsed': !__VLS_ctx.sidebarVisible,
+                    'sidebar-mobile': __VLS_ctx.isMobile
+                }]) },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "sidebar-header" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+        ...{ class: "sidebar-title" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "sidebar-list" },
+    });
+    for (const [conv] of __VLS_getVForSourceType((__VLS_ctx.conversationList))) {
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ onClick: (...[$event]) => {
+                    if (!(__VLS_ctx.auth.isLoggedIn))
+                        return;
+                    __VLS_ctx.switchConversation(conv.id);
+                } },
+            key: (conv.id),
+            ...{ class: (['sidebar-item', {
+                        active: conv.id === __VLS_ctx.conversationId,
+                        switching: conv.id === __VLS_ctx.switchingConversationId,
+                    }]) },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+            ...{ class: "sidebar-item-main" },
+        });
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+            ...{ class: "sidebar-item-title" },
+        });
+        (conv.title || '新对话');
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+            ...{ class: "sidebar-item-time" },
+        });
+        (__VLS_ctx.formatTime(conv.last_message_at));
+        const __VLS_0 = {}.APopconfirm;
+        /** @type {[typeof __VLS_components.APopconfirm, typeof __VLS_components.aPopconfirm, typeof __VLS_components.APopconfirm, typeof __VLS_components.aPopconfirm, ]} */ ;
+        // @ts-ignore
+        const __VLS_1 = __VLS_asFunctionalComponent(__VLS_0, new __VLS_0({
+            ...{ 'onConfirm': {} },
+            title: "确认删除该会话？",
+            okText: "删除",
+            cancelText: "取消",
+            placement: "right",
+        }));
+        const __VLS_2 = __VLS_1({
+            ...{ 'onConfirm': {} },
+            title: "确认删除该会话？",
+            okText: "删除",
+            cancelText: "取消",
+            placement: "right",
+        }, ...__VLS_functionalComponentArgsRest(__VLS_1));
+        let __VLS_4;
+        let __VLS_5;
+        let __VLS_6;
+        const __VLS_7 = {
+            onConfirm: (...[$event]) => {
+                if (!(__VLS_ctx.auth.isLoggedIn))
+                    return;
+                __VLS_ctx.deleteConversationItem(conv.id);
+            }
+        };
+        __VLS_3.slots.default;
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+            ...{ onClick: () => { } },
+            type: "button",
+            ...{ class: "sidebar-delete-btn" },
+            title: "删除会话",
+            disabled: (__VLS_ctx.deletingConversationId === conv.id),
+        });
+        const __VLS_8 = {}.DeleteOutlined;
+        /** @type {[typeof __VLS_components.DeleteOutlined, ]} */ ;
+        // @ts-ignore
+        const __VLS_9 = __VLS_asFunctionalComponent(__VLS_8, new __VLS_8({}));
+        const __VLS_10 = __VLS_9({}, ...__VLS_functionalComponentArgsRest(__VLS_9));
+        var __VLS_3;
+    }
+    if (__VLS_ctx.conversationList.length === 0 && !__VLS_ctx.loadingConversations) {
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "sidebar-empty" },
+        });
+    }
+    if (__VLS_ctx.loadingConversations) {
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "sidebar-loading" },
+        });
+    }
+    else if (__VLS_ctx.hasMoreConversations) {
+        const __VLS_12 = {}.AButton;
+        /** @type {[typeof __VLS_components.AButton, typeof __VLS_components.aButton, typeof __VLS_components.AButton, typeof __VLS_components.aButton, ]} */ ;
+        // @ts-ignore
+        const __VLS_13 = __VLS_asFunctionalComponent(__VLS_12, new __VLS_12({
+            ...{ 'onClick': {} },
+            block: true,
+            size: "small",
+            ...{ class: "sidebar-load-more" },
+        }));
+        const __VLS_14 = __VLS_13({
+            ...{ 'onClick': {} },
+            block: true,
+            size: "small",
+            ...{ class: "sidebar-load-more" },
+        }, ...__VLS_functionalComponentArgsRest(__VLS_13));
+        let __VLS_16;
+        let __VLS_17;
+        let __VLS_18;
+        const __VLS_19 = {
+            onClick: (__VLS_ctx.loadMoreConversations)
+        };
+        __VLS_15.slots.default;
+        var __VLS_15;
+    }
+}
+if (__VLS_ctx.isMobile && __VLS_ctx.sidebarVisible) {
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div)({
+        ...{ onClick: (...[$event]) => {
+                if (!(__VLS_ctx.isMobile && __VLS_ctx.sidebarVisible))
+                    return;
+                __VLS_ctx.sidebarVisible = false;
+            } },
+        ...{ class: "sidebar-overlay" },
+    });
+}
 __VLS_asFunctionalElement(__VLS_intrinsicElements.section, __VLS_intrinsicElements.section)({
-    ...{ class: "chat-panel" },
+    ...{ class: (['chat-panel', { 'sidebar-hidden-panel': !__VLS_ctx.auth.isLoggedIn || !__VLS_ctx.sidebarVisible }]) },
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.header, __VLS_intrinsicElements.header)({
     ...{ class: "chat-header" },
@@ -690,71 +1005,89 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.header, __VLS_intrinsicElement
 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
     ...{ class: "header-left" },
 });
+if (__VLS_ctx.auth.isLoggedIn) {
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+        ...{ onClick: (...[$event]) => {
+                if (!(__VLS_ctx.auth.isLoggedIn))
+                    return;
+                __VLS_ctx.sidebarVisible = !__VLS_ctx.sidebarVisible;
+            } },
+        type: "button",
+        ...{ class: "sidebar-toggle-btn" },
+        title: (__VLS_ctx.sidebarVisible ? '收起历史会话' : '展开历史会话'),
+        'aria-label': (__VLS_ctx.sidebarVisible ? '收起历史会话' : '展开历史会话'),
+    });
+    const __VLS_20 = {}.MenuOutlined;
+    /** @type {[typeof __VLS_components.MenuOutlined, ]} */ ;
+    // @ts-ignore
+    const __VLS_21 = __VLS_asFunctionalComponent(__VLS_20, new __VLS_20({}));
+    const __VLS_22 = __VLS_21({}, ...__VLS_functionalComponentArgsRest(__VLS_21));
+}
 __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
     ...{ class: "header-title" },
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
     ...{ class: "header-right" },
 });
-const __VLS_0 = {}.ATooltip;
+const __VLS_24 = {}.ATooltip;
 /** @type {[typeof __VLS_components.ATooltip, typeof __VLS_components.aTooltip, typeof __VLS_components.ATooltip, typeof __VLS_components.aTooltip, ]} */ ;
 // @ts-ignore
-const __VLS_1 = __VLS_asFunctionalComponent(__VLS_0, new __VLS_0({
+const __VLS_25 = __VLS_asFunctionalComponent(__VLS_24, new __VLS_24({
     title: "新对话",
 }));
-const __VLS_2 = __VLS_1({
+const __VLS_26 = __VLS_25({
     title: "新对话",
-}, ...__VLS_functionalComponentArgsRest(__VLS_1));
-__VLS_3.slots.default;
+}, ...__VLS_functionalComponentArgsRest(__VLS_25));
+__VLS_27.slots.default;
 if (__VLS_ctx.auth.isLoggedIn) {
-    const __VLS_4 = {}.AButton;
+    const __VLS_28 = {}.AButton;
     /** @type {[typeof __VLS_components.AButton, typeof __VLS_components.aButton, typeof __VLS_components.AButton, typeof __VLS_components.aButton, ]} */ ;
     // @ts-ignore
-    const __VLS_5 = __VLS_asFunctionalComponent(__VLS_4, new __VLS_4({
+    const __VLS_29 = __VLS_asFunctionalComponent(__VLS_28, new __VLS_28({
         ...{ 'onClick': {} },
         shape: "circle",
         disabled: (__VLS_ctx.loading || __VLS_ctx.restoringConversation),
         ...{ class: "header-icon-button" },
         'aria-label': "新对话",
     }));
-    const __VLS_6 = __VLS_5({
+    const __VLS_30 = __VLS_29({
         ...{ 'onClick': {} },
         shape: "circle",
         disabled: (__VLS_ctx.loading || __VLS_ctx.restoringConversation),
         ...{ class: "header-icon-button" },
         'aria-label': "新对话",
-    }, ...__VLS_functionalComponentArgsRest(__VLS_5));
-    let __VLS_8;
-    let __VLS_9;
-    let __VLS_10;
-    const __VLS_11 = {
+    }, ...__VLS_functionalComponentArgsRest(__VLS_29));
+    let __VLS_32;
+    let __VLS_33;
+    let __VLS_34;
+    const __VLS_35 = {
         onClick: (__VLS_ctx.handleNewConversation)
     };
-    __VLS_7.slots.default;
+    __VLS_31.slots.default;
     {
-        const { icon: __VLS_thisSlot } = __VLS_7.slots;
-        const __VLS_12 = {}.PlusOutlined;
+        const { icon: __VLS_thisSlot } = __VLS_31.slots;
+        const __VLS_36 = {}.PlusOutlined;
         /** @type {[typeof __VLS_components.PlusOutlined, ]} */ ;
         // @ts-ignore
-        const __VLS_13 = __VLS_asFunctionalComponent(__VLS_12, new __VLS_12({}));
-        const __VLS_14 = __VLS_13({}, ...__VLS_functionalComponentArgsRest(__VLS_13));
+        const __VLS_37 = __VLS_asFunctionalComponent(__VLS_36, new __VLS_36({}));
+        const __VLS_38 = __VLS_37({}, ...__VLS_functionalComponentArgsRest(__VLS_37));
     }
-    var __VLS_7;
+    var __VLS_31;
 }
-var __VLS_3;
+var __VLS_27;
 if (__VLS_ctx.auth.isLoggedIn && __VLS_ctx.auth.currentUser) {
-    const __VLS_16 = {}.ADropdown;
+    const __VLS_40 = {}.ADropdown;
     /** @type {[typeof __VLS_components.ADropdown, typeof __VLS_components.aDropdown, typeof __VLS_components.ADropdown, typeof __VLS_components.aDropdown, ]} */ ;
     // @ts-ignore
-    const __VLS_17 = __VLS_asFunctionalComponent(__VLS_16, new __VLS_16({
+    const __VLS_41 = __VLS_asFunctionalComponent(__VLS_40, new __VLS_40({
         trigger: "click",
         placement: "bottomRight",
     }));
-    const __VLS_18 = __VLS_17({
+    const __VLS_42 = __VLS_41({
         trigger: "click",
         placement: "bottomRight",
-    }, ...__VLS_functionalComponentArgsRest(__VLS_17));
-    __VLS_19.slots.default;
+    }, ...__VLS_functionalComponentArgsRest(__VLS_41));
+    __VLS_43.slots.default;
     __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
         type: "button",
         ...{ class: "user-avatar-button" },
@@ -765,54 +1098,54 @@ if (__VLS_ctx.auth.isLoggedIn && __VLS_ctx.auth.currentUser) {
     });
     (__VLS_ctx.getUserInitial(__VLS_ctx.auth.currentUser.name));
     {
-        const { overlay: __VLS_thisSlot } = __VLS_19.slots;
-        const __VLS_20 = {}.AMenu;
+        const { overlay: __VLS_thisSlot } = __VLS_43.slots;
+        const __VLS_44 = {}.AMenu;
         /** @type {[typeof __VLS_components.AMenu, typeof __VLS_components.aMenu, typeof __VLS_components.AMenu, typeof __VLS_components.aMenu, ]} */ ;
         // @ts-ignore
-        const __VLS_21 = __VLS_asFunctionalComponent(__VLS_20, new __VLS_20({}));
-        const __VLS_22 = __VLS_21({}, ...__VLS_functionalComponentArgsRest(__VLS_21));
-        __VLS_23.slots.default;
-        const __VLS_24 = {}.AMenuItem;
+        const __VLS_45 = __VLS_asFunctionalComponent(__VLS_44, new __VLS_44({}));
+        const __VLS_46 = __VLS_45({}, ...__VLS_functionalComponentArgsRest(__VLS_45));
+        __VLS_47.slots.default;
+        const __VLS_48 = {}.AMenuItem;
         /** @type {[typeof __VLS_components.AMenuItem, typeof __VLS_components.aMenuItem, typeof __VLS_components.AMenuItem, typeof __VLS_components.aMenuItem, ]} */ ;
         // @ts-ignore
-        const __VLS_25 = __VLS_asFunctionalComponent(__VLS_24, new __VLS_24({
+        const __VLS_49 = __VLS_asFunctionalComponent(__VLS_48, new __VLS_48({
             key: "user",
             disabled: true,
         }));
-        const __VLS_26 = __VLS_25({
+        const __VLS_50 = __VLS_49({
             key: "user",
             disabled: true,
-        }, ...__VLS_functionalComponentArgsRest(__VLS_25));
-        __VLS_27.slots.default;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_49));
+        __VLS_51.slots.default;
         (__VLS_ctx.auth.currentUser.name);
-        var __VLS_27;
-        const __VLS_28 = {}.AMenuDivider;
+        var __VLS_51;
+        const __VLS_52 = {}.AMenuDivider;
         /** @type {[typeof __VLS_components.AMenuDivider, typeof __VLS_components.aMenuDivider, ]} */ ;
         // @ts-ignore
-        const __VLS_29 = __VLS_asFunctionalComponent(__VLS_28, new __VLS_28({}));
-        const __VLS_30 = __VLS_29({}, ...__VLS_functionalComponentArgsRest(__VLS_29));
-        const __VLS_32 = {}.AMenuItem;
+        const __VLS_53 = __VLS_asFunctionalComponent(__VLS_52, new __VLS_52({}));
+        const __VLS_54 = __VLS_53({}, ...__VLS_functionalComponentArgsRest(__VLS_53));
+        const __VLS_56 = {}.AMenuItem;
         /** @type {[typeof __VLS_components.AMenuItem, typeof __VLS_components.aMenuItem, typeof __VLS_components.AMenuItem, typeof __VLS_components.aMenuItem, ]} */ ;
         // @ts-ignore
-        const __VLS_33 = __VLS_asFunctionalComponent(__VLS_32, new __VLS_32({
+        const __VLS_57 = __VLS_asFunctionalComponent(__VLS_56, new __VLS_56({
             ...{ 'onClick': {} },
             key: "logout",
         }));
-        const __VLS_34 = __VLS_33({
+        const __VLS_58 = __VLS_57({
             ...{ 'onClick': {} },
             key: "logout",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_33));
-        let __VLS_36;
-        let __VLS_37;
-        let __VLS_38;
-        const __VLS_39 = {
+        }, ...__VLS_functionalComponentArgsRest(__VLS_57));
+        let __VLS_60;
+        let __VLS_61;
+        let __VLS_62;
+        const __VLS_63 = {
             onClick: (__VLS_ctx.handleLogout)
         };
-        __VLS_35.slots.default;
-        var __VLS_35;
-        var __VLS_23;
+        __VLS_59.slots.default;
+        var __VLS_59;
+        var __VLS_47;
     }
-    var __VLS_19;
+    var __VLS_43;
 }
 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
     ref: "msgContainer",
@@ -823,43 +1156,43 @@ if (!__VLS_ctx.canChat) {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "hint-banner" },
     });
-    const __VLS_40 = {}.AButton;
+    const __VLS_64 = {}.AButton;
     /** @type {[typeof __VLS_components.AButton, typeof __VLS_components.aButton, typeof __VLS_components.AButton, typeof __VLS_components.aButton, ]} */ ;
     // @ts-ignore
-    const __VLS_41 = __VLS_asFunctionalComponent(__VLS_40, new __VLS_40({
+    const __VLS_65 = __VLS_asFunctionalComponent(__VLS_64, new __VLS_64({
         ...{ 'onClick': {} },
         type: "primary",
     }));
-    const __VLS_42 = __VLS_41({
+    const __VLS_66 = __VLS_65({
         ...{ 'onClick': {} },
         type: "primary",
-    }, ...__VLS_functionalComponentArgsRest(__VLS_41));
-    let __VLS_44;
-    let __VLS_45;
-    let __VLS_46;
-    const __VLS_47 = {
+    }, ...__VLS_functionalComponentArgsRest(__VLS_65));
+    let __VLS_68;
+    let __VLS_69;
+    let __VLS_70;
+    const __VLS_71 = {
         onClick: (...[$event]) => {
             if (!(!__VLS_ctx.canChat))
                 return;
             __VLS_ctx.$router.push('/login');
         }
     };
-    __VLS_43.slots.default;
-    var __VLS_43;
+    __VLS_67.slots.default;
+    var __VLS_67;
 }
 else if (__VLS_ctx.messages.length === 0 && !__VLS_ctx.loading) {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "welcome-banner" },
     });
-    const __VLS_48 = {}.RobotOutlined;
+    const __VLS_72 = {}.RobotOutlined;
     /** @type {[typeof __VLS_components.RobotOutlined, ]} */ ;
     // @ts-ignore
-    const __VLS_49 = __VLS_asFunctionalComponent(__VLS_48, new __VLS_48({
+    const __VLS_73 = __VLS_asFunctionalComponent(__VLS_72, new __VLS_72({
         ...{ class: "welcome-icon" },
     }));
-    const __VLS_50 = __VLS_49({
+    const __VLS_74 = __VLS_73({
         ...{ class: "welcome-icon" },
-    }, ...__VLS_functionalComponentArgsRest(__VLS_49));
+    }, ...__VLS_functionalComponentArgsRest(__VLS_73));
     __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
         ...{ class: "welcome-text" },
     });
@@ -893,29 +1226,29 @@ for (const [msg] of __VLS_getVForSourceType((__VLS_ctx.messages))) {
             ...{ class: "workflow-status-icon" },
         });
         if (__VLS_ctx.isWorkflowRunning(msg)) {
-            const __VLS_52 = {}.LoadingOutlined;
+            const __VLS_76 = {}.LoadingOutlined;
             /** @type {[typeof __VLS_components.LoadingOutlined, ]} */ ;
             // @ts-ignore
-            const __VLS_53 = __VLS_asFunctionalComponent(__VLS_52, new __VLS_52({
+            const __VLS_77 = __VLS_asFunctionalComponent(__VLS_76, new __VLS_76({
                 spin: true,
             }));
-            const __VLS_54 = __VLS_53({
+            const __VLS_78 = __VLS_77({
                 spin: true,
-            }, ...__VLS_functionalComponentArgsRest(__VLS_53));
+            }, ...__VLS_functionalComponentArgsRest(__VLS_77));
         }
         else if (__VLS_ctx.getWorkflowStatus(msg) === 'failed') {
-            const __VLS_56 = {}.CloseCircleFilled;
+            const __VLS_80 = {}.CloseCircleFilled;
             /** @type {[typeof __VLS_components.CloseCircleFilled, ]} */ ;
             // @ts-ignore
-            const __VLS_57 = __VLS_asFunctionalComponent(__VLS_56, new __VLS_56({}));
-            const __VLS_58 = __VLS_57({}, ...__VLS_functionalComponentArgsRest(__VLS_57));
+            const __VLS_81 = __VLS_asFunctionalComponent(__VLS_80, new __VLS_80({}));
+            const __VLS_82 = __VLS_81({}, ...__VLS_functionalComponentArgsRest(__VLS_81));
         }
         else {
-            const __VLS_60 = {}.CheckCircleFilled;
+            const __VLS_84 = {}.CheckCircleFilled;
             /** @type {[typeof __VLS_components.CheckCircleFilled, ]} */ ;
             // @ts-ignore
-            const __VLS_61 = __VLS_asFunctionalComponent(__VLS_60, new __VLS_60({}));
-            const __VLS_62 = __VLS_61({}, ...__VLS_functionalComponentArgsRest(__VLS_61));
+            const __VLS_85 = __VLS_asFunctionalComponent(__VLS_84, new __VLS_84({}));
+            const __VLS_86 = __VLS_85({}, ...__VLS_functionalComponentArgsRest(__VLS_85));
         }
         __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
             ...{ class: "workflow-copy" },
@@ -933,15 +1266,15 @@ for (const [msg] of __VLS_getVForSourceType((__VLS_ctx.messages))) {
         });
         (__VLS_ctx.getWorkflowCountText(msg));
         if (msg.steps.length > 0) {
-            const __VLS_64 = {}.DownOutlined;
+            const __VLS_88 = {}.DownOutlined;
             /** @type {[typeof __VLS_components.DownOutlined, ]} */ ;
             // @ts-ignore
-            const __VLS_65 = __VLS_asFunctionalComponent(__VLS_64, new __VLS_64({
+            const __VLS_89 = __VLS_asFunctionalComponent(__VLS_88, new __VLS_88({
                 ...{ class: (['workflow-chevron', { expanded: __VLS_ctx.expandedSteps[msg.id] }]) },
             }));
-            const __VLS_66 = __VLS_65({
+            const __VLS_90 = __VLS_89({
                 ...{ class: (['workflow-chevron', { expanded: __VLS_ctx.expandedSteps[msg.id] }]) },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_65));
+            }, ...__VLS_functionalComponentArgsRest(__VLS_89));
         }
         if (msg.steps.length > 0 && __VLS_ctx.expandedSteps[msg.id]) {
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
@@ -981,36 +1314,36 @@ for (const [msg] of __VLS_getVForSourceType((__VLS_ctx.messages))) {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
             ...{ class: "thought-section" },
         });
-        const __VLS_68 = {}.ACollapse;
+        const __VLS_92 = {}.ACollapse;
         /** @type {[typeof __VLS_components.ACollapse, typeof __VLS_components.aCollapse, typeof __VLS_components.ACollapse, typeof __VLS_components.aCollapse, ]} */ ;
         // @ts-ignore
-        const __VLS_69 = __VLS_asFunctionalComponent(__VLS_68, new __VLS_68({
+        const __VLS_93 = __VLS_asFunctionalComponent(__VLS_92, new __VLS_92({
             activeKey: (__VLS_ctx.thoughtOpen ? ['thought'] : []),
             ghost: true,
         }));
-        const __VLS_70 = __VLS_69({
+        const __VLS_94 = __VLS_93({
             activeKey: (__VLS_ctx.thoughtOpen ? ['thought'] : []),
             ghost: true,
-        }, ...__VLS_functionalComponentArgsRest(__VLS_69));
-        __VLS_71.slots.default;
-        const __VLS_72 = {}.ACollapsePanel;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_93));
+        __VLS_95.slots.default;
+        const __VLS_96 = {}.ACollapsePanel;
         /** @type {[typeof __VLS_components.ACollapsePanel, typeof __VLS_components.aCollapsePanel, typeof __VLS_components.ACollapsePanel, typeof __VLS_components.aCollapsePanel, ]} */ ;
         // @ts-ignore
-        const __VLS_73 = __VLS_asFunctionalComponent(__VLS_72, new __VLS_72({
+        const __VLS_97 = __VLS_asFunctionalComponent(__VLS_96, new __VLS_96({
             key: "thought",
             header: "思考过程",
         }));
-        const __VLS_74 = __VLS_73({
+        const __VLS_98 = __VLS_97({
             key: "thought",
             header: "思考过程",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_73));
-        __VLS_75.slots.default;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_97));
+        __VLS_99.slots.default;
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
             ...{ class: "thought-content" },
         });
         (msg.displayThought);
-        var __VLS_75;
-        var __VLS_71;
+        var __VLS_99;
+        var __VLS_95;
     }
     if (msg.role === 'assistant' && msg.displayContent) {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div)({
@@ -1025,187 +1358,222 @@ for (const [msg] of __VLS_getVForSourceType((__VLS_ctx.messages))) {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
             ...{ class: "speech-actions" },
         });
-        const __VLS_76 = {}.AButton;
+        const __VLS_100 = {}.AButton;
         /** @type {[typeof __VLS_components.AButton, typeof __VLS_components.aButton, typeof __VLS_components.AButton, typeof __VLS_components.aButton, ]} */ ;
         // @ts-ignore
-        const __VLS_77 = __VLS_asFunctionalComponent(__VLS_76, new __VLS_76({
+        const __VLS_101 = __VLS_asFunctionalComponent(__VLS_100, new __VLS_100({
             ...{ 'onClick': {} },
             size: "small",
             type: "link",
+            loading: (__VLS_ctx.synth.isLoading.value),
             title: (__VLS_ctx.synth.isSpeaking.value ? '停止播报' : '播报回复'),
         }));
-        const __VLS_78 = __VLS_77({
+        const __VLS_102 = __VLS_101({
             ...{ 'onClick': {} },
             size: "small",
             type: "link",
+            loading: (__VLS_ctx.synth.isLoading.value),
             title: (__VLS_ctx.synth.isSpeaking.value ? '停止播报' : '播报回复'),
-        }, ...__VLS_functionalComponentArgsRest(__VLS_77));
-        let __VLS_80;
-        let __VLS_81;
-        let __VLS_82;
-        const __VLS_83 = {
+        }, ...__VLS_functionalComponentArgsRest(__VLS_101));
+        let __VLS_104;
+        let __VLS_105;
+        let __VLS_106;
+        const __VLS_107 = {
             onClick: (...[$event]) => {
                 if (!(msg.role === 'assistant' && msg.content && __VLS_ctx.synth.isSupported.value))
                     return;
                 __VLS_ctx.toggleSpeechOutput(msg.content);
             }
         };
-        __VLS_79.slots.default;
+        __VLS_103.slots.default;
         if (__VLS_ctx.synth.isSpeaking.value) {
-            const __VLS_84 = {}.PauseCircleOutlined;
+            const __VLS_108 = {}.PauseCircleOutlined;
             /** @type {[typeof __VLS_components.PauseCircleOutlined, ]} */ ;
             // @ts-ignore
-            const __VLS_85 = __VLS_asFunctionalComponent(__VLS_84, new __VLS_84({}));
-            const __VLS_86 = __VLS_85({}, ...__VLS_functionalComponentArgsRest(__VLS_85));
+            const __VLS_109 = __VLS_asFunctionalComponent(__VLS_108, new __VLS_108({}));
+            const __VLS_110 = __VLS_109({}, ...__VLS_functionalComponentArgsRest(__VLS_109));
         }
         else {
-            const __VLS_88 = {}.SoundOutlined;
+            const __VLS_112 = {}.SoundOutlined;
             /** @type {[typeof __VLS_components.SoundOutlined, ]} */ ;
             // @ts-ignore
-            const __VLS_89 = __VLS_asFunctionalComponent(__VLS_88, new __VLS_88({}));
-            const __VLS_90 = __VLS_89({}, ...__VLS_functionalComponentArgsRest(__VLS_89));
+            const __VLS_113 = __VLS_asFunctionalComponent(__VLS_112, new __VLS_112({}));
+            const __VLS_114 = __VLS_113({}, ...__VLS_functionalComponentArgsRest(__VLS_113));
         }
-        var __VLS_79;
+        var __VLS_103;
     }
 }
 if (__VLS_ctx.errorMsg) {
-    const __VLS_92 = {}.AAlert;
-    /** @type {[typeof __VLS_components.AAlert, typeof __VLS_components.aAlert, typeof __VLS_components.AAlert, typeof __VLS_components.aAlert, ]} */ ;
+    const __VLS_116 = {}.AAlert;
+    /** @type {[typeof __VLS_components.AAlert, typeof __VLS_components.aAlert, ]} */ ;
     // @ts-ignore
-    const __VLS_93 = __VLS_asFunctionalComponent(__VLS_92, new __VLS_92({
+    const __VLS_117 = __VLS_asFunctionalComponent(__VLS_116, new __VLS_116({
         ...{ 'onClose': {} },
         type: "error",
+        message: (__VLS_ctx.errorMsg),
         showIcon: true,
         closable: true,
         ...{ class: "error-bar" },
     }));
-    const __VLS_94 = __VLS_93({
+    const __VLS_118 = __VLS_117({
         ...{ 'onClose': {} },
         type: "error",
+        message: (__VLS_ctx.errorMsg),
         showIcon: true,
         closable: true,
         ...{ class: "error-bar" },
-    }, ...__VLS_functionalComponentArgsRest(__VLS_93));
-    let __VLS_96;
-    let __VLS_97;
-    let __VLS_98;
-    const __VLS_99 = {
+    }, ...__VLS_functionalComponentArgsRest(__VLS_117));
+    let __VLS_120;
+    let __VLS_121;
+    let __VLS_122;
+    const __VLS_123 = {
         onClose: (...[$event]) => {
             if (!(__VLS_ctx.errorMsg))
                 return;
             __VLS_ctx.errorMsg = '';
         }
     };
-    __VLS_95.slots.default;
-    (__VLS_ctx.errorMsg);
-    var __VLS_95;
+    var __VLS_119;
 }
 __VLS_asFunctionalElement(__VLS_intrinsicElements.footer, __VLS_intrinsicElements.footer)({
     ...{ class: "composer" },
 });
-const __VLS_100 = {}.ATextarea;
+const __VLS_124 = {}.ATextarea;
 /** @type {[typeof __VLS_components.ATextarea, typeof __VLS_components.aTextarea, ]} */ ;
 // @ts-ignore
-const __VLS_101 = __VLS_asFunctionalComponent(__VLS_100, new __VLS_100({
-    ...{ 'onPressEnter': {} },
-    value: (__VLS_ctx.question),
-    ...{ class: "composer-input" },
-    autoSize: ({ minRows: 1, maxRows: 4 }),
-    placeholder: (__VLS_ctx.speech.isListening.value ? '正在聆听...' : '输入问题，Enter 发送'),
-    disabled: (!__VLS_ctx.canChat || __VLS_ctx.speech.isListening.value),
-}));
-const __VLS_102 = __VLS_101({
-    ...{ 'onPressEnter': {} },
-    value: (__VLS_ctx.question),
-    ...{ class: "composer-input" },
-    autoSize: ({ minRows: 1, maxRows: 4 }),
-    placeholder: (__VLS_ctx.speech.isListening.value ? '正在聆听...' : '输入问题，Enter 发送'),
-    disabled: (!__VLS_ctx.canChat || __VLS_ctx.speech.isListening.value),
-}, ...__VLS_functionalComponentArgsRest(__VLS_101));
-let __VLS_104;
-let __VLS_105;
-let __VLS_106;
-const __VLS_107 = {
-    onPressEnter: (__VLS_ctx.safeSend)
-};
-var __VLS_103;
-if (__VLS_ctx.speech.isSupported.value) {
-    const __VLS_108 = {}.AButton;
-    /** @type {[typeof __VLS_components.AButton, typeof __VLS_components.aButton, typeof __VLS_components.AButton, typeof __VLS_components.aButton, ]} */ ;
-    // @ts-ignore
-    const __VLS_109 = __VLS_asFunctionalComponent(__VLS_108, new __VLS_108({
-        ...{ 'onClick': {} },
-        type: (__VLS_ctx.speech.isListening.value ? 'primary' : 'default'),
-        danger: (__VLS_ctx.speech.isListening.value),
-        title: (__VLS_ctx.speech.isListening.value ? '停止聆听' : '语音输入'),
-        size: "large",
-        ...{ class: "composer-icon-button" },
-    }));
-    const __VLS_110 = __VLS_109({
-        ...{ 'onClick': {} },
-        type: (__VLS_ctx.speech.isListening.value ? 'primary' : 'default'),
-        danger: (__VLS_ctx.speech.isListening.value),
-        title: (__VLS_ctx.speech.isListening.value ? '停止聆听' : '语音输入'),
-        size: "large",
-        ...{ class: "composer-icon-button" },
-    }, ...__VLS_functionalComponentArgsRest(__VLS_109));
-    let __VLS_112;
-    let __VLS_113;
-    let __VLS_114;
-    const __VLS_115 = {
-        onClick: (__VLS_ctx.toggleSpeechInput)
-    };
-    __VLS_111.slots.default;
-    {
-        const { icon: __VLS_thisSlot } = __VLS_111.slots;
-        if (__VLS_ctx.speech.isListening.value) {
-            const __VLS_116 = {}.PauseCircleOutlined;
-            /** @type {[typeof __VLS_components.PauseCircleOutlined, ]} */ ;
-            // @ts-ignore
-            const __VLS_117 = __VLS_asFunctionalComponent(__VLS_116, new __VLS_116({}));
-            const __VLS_118 = __VLS_117({}, ...__VLS_functionalComponentArgsRest(__VLS_117));
-        }
-        else {
-            const __VLS_120 = {}.AudioOutlined;
-            /** @type {[typeof __VLS_components.AudioOutlined, ]} */ ;
-            // @ts-ignore
-            const __VLS_121 = __VLS_asFunctionalComponent(__VLS_120, new __VLS_120({}));
-            const __VLS_122 = __VLS_121({}, ...__VLS_functionalComponentArgsRest(__VLS_121));
-        }
-    }
-    var __VLS_111;
-}
-const __VLS_124 = {}.AButton;
-/** @type {[typeof __VLS_components.AButton, typeof __VLS_components.aButton, typeof __VLS_components.AButton, typeof __VLS_components.aButton, ]} */ ;
-// @ts-ignore
 const __VLS_125 = __VLS_asFunctionalComponent(__VLS_124, new __VLS_124({
-    ...{ 'onClick': {} },
-    type: "primary",
-    loading: (__VLS_ctx.loading),
-    disabled: (!__VLS_ctx.canChat || (!__VLS_ctx.question.trim() && !__VLS_ctx.speech.transcript.value)),
-    size: "large",
-    ...{ class: "composer-send-button" },
+    ...{ 'onPressEnter': {} },
+    value: (__VLS_ctx.question),
+    ...{ class: "composer-input" },
+    autoSize: ({ minRows: 1, maxRows: 4 }),
+    placeholder: (__VLS_ctx.speechPlaceholder),
+    disabled: (!__VLS_ctx.canChat || __VLS_ctx.speech.isRecording.value || __VLS_ctx.speech.isTranscribing.value),
 }));
 const __VLS_126 = __VLS_125({
-    ...{ 'onClick': {} },
-    type: "primary",
-    loading: (__VLS_ctx.loading),
-    disabled: (!__VLS_ctx.canChat || (!__VLS_ctx.question.trim() && !__VLS_ctx.speech.transcript.value)),
-    size: "large",
-    ...{ class: "composer-send-button" },
+    ...{ 'onPressEnter': {} },
+    value: (__VLS_ctx.question),
+    ...{ class: "composer-input" },
+    autoSize: ({ minRows: 1, maxRows: 4 }),
+    placeholder: (__VLS_ctx.speechPlaceholder),
+    disabled: (!__VLS_ctx.canChat || __VLS_ctx.speech.isRecording.value || __VLS_ctx.speech.isTranscribing.value),
 }, ...__VLS_functionalComponentArgsRest(__VLS_125));
 let __VLS_128;
 let __VLS_129;
 let __VLS_130;
 const __VLS_131 = {
+    onPressEnter: (__VLS_ctx.safeSend)
+};
+var __VLS_127;
+if (__VLS_ctx.speech.isSupported.value) {
+    const __VLS_132 = {}.AButton;
+    /** @type {[typeof __VLS_components.AButton, typeof __VLS_components.aButton, typeof __VLS_components.AButton, typeof __VLS_components.aButton, ]} */ ;
+    // @ts-ignore
+    const __VLS_133 = __VLS_asFunctionalComponent(__VLS_132, new __VLS_132({
+        ...{ 'onMousedown': {} },
+        ...{ 'onMouseup': {} },
+        ...{ 'onMouseleave': {} },
+        ...{ 'onTouchstart': {} },
+        ...{ 'onTouchend': {} },
+        type: (__VLS_ctx.speech.isRecording.value ? 'primary' : 'default'),
+        danger: (__VLS_ctx.speech.isRecording.value),
+        loading: (__VLS_ctx.speech.isTranscribing.value),
+        title: (__VLS_ctx.speech.isRecording.value ? '松开结束录音' : '长按语音输入'),
+        size: "large",
+        ...{ class: "composer-icon-button" },
+    }));
+    const __VLS_134 = __VLS_133({
+        ...{ 'onMousedown': {} },
+        ...{ 'onMouseup': {} },
+        ...{ 'onMouseleave': {} },
+        ...{ 'onTouchstart': {} },
+        ...{ 'onTouchend': {} },
+        type: (__VLS_ctx.speech.isRecording.value ? 'primary' : 'default'),
+        danger: (__VLS_ctx.speech.isRecording.value),
+        loading: (__VLS_ctx.speech.isTranscribing.value),
+        title: (__VLS_ctx.speech.isRecording.value ? '松开结束录音' : '长按语音输入'),
+        size: "large",
+        ...{ class: "composer-icon-button" },
+    }, ...__VLS_functionalComponentArgsRest(__VLS_133));
+    let __VLS_136;
+    let __VLS_137;
+    let __VLS_138;
+    const __VLS_139 = {
+        onMousedown: (__VLS_ctx.startSpeechInput)
+    };
+    const __VLS_140 = {
+        onMouseup: (__VLS_ctx.stopSpeechInput)
+    };
+    const __VLS_141 = {
+        onMouseleave: (__VLS_ctx.stopSpeechInput)
+    };
+    const __VLS_142 = {
+        onTouchstart: (__VLS_ctx.startSpeechInput)
+    };
+    const __VLS_143 = {
+        onTouchend: (__VLS_ctx.stopSpeechInput)
+    };
+    __VLS_135.slots.default;
+    {
+        const { icon: __VLS_thisSlot } = __VLS_135.slots;
+        if (__VLS_ctx.speech.isRecording.value) {
+            const __VLS_144 = {}.PauseCircleOutlined;
+            /** @type {[typeof __VLS_components.PauseCircleOutlined, ]} */ ;
+            // @ts-ignore
+            const __VLS_145 = __VLS_asFunctionalComponent(__VLS_144, new __VLS_144({}));
+            const __VLS_146 = __VLS_145({}, ...__VLS_functionalComponentArgsRest(__VLS_145));
+        }
+        else {
+            const __VLS_148 = {}.AudioOutlined;
+            /** @type {[typeof __VLS_components.AudioOutlined, ]} */ ;
+            // @ts-ignore
+            const __VLS_149 = __VLS_asFunctionalComponent(__VLS_148, new __VLS_148({}));
+            const __VLS_150 = __VLS_149({}, ...__VLS_functionalComponentArgsRest(__VLS_149));
+        }
+    }
+    var __VLS_135;
+}
+const __VLS_152 = {}.AButton;
+/** @type {[typeof __VLS_components.AButton, typeof __VLS_components.aButton, typeof __VLS_components.AButton, typeof __VLS_components.aButton, ]} */ ;
+// @ts-ignore
+const __VLS_153 = __VLS_asFunctionalComponent(__VLS_152, new __VLS_152({
+    ...{ 'onClick': {} },
+    type: "primary",
+    loading: (__VLS_ctx.loading),
+    disabled: (!__VLS_ctx.canChat || (!__VLS_ctx.question.trim() && !__VLS_ctx.speech.transcript.value)),
+    size: "large",
+    ...{ class: "composer-send-button" },
+}));
+const __VLS_154 = __VLS_153({
+    ...{ 'onClick': {} },
+    type: "primary",
+    loading: (__VLS_ctx.loading),
+    disabled: (!__VLS_ctx.canChat || (!__VLS_ctx.question.trim() && !__VLS_ctx.speech.transcript.value)),
+    size: "large",
+    ...{ class: "composer-send-button" },
+}, ...__VLS_functionalComponentArgsRest(__VLS_153));
+let __VLS_156;
+let __VLS_157;
+let __VLS_158;
+const __VLS_159 = {
     onClick: (__VLS_ctx.safeSend)
 };
-__VLS_127.slots.default;
-var __VLS_127;
+__VLS_155.slots.default;
+var __VLS_155;
 /** @type {__VLS_StyleScopedClasses['chat-page']} */ ;
-/** @type {__VLS_StyleScopedClasses['chat-panel']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-header']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-title']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-list']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-item-main']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-item-title']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-item-time']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-delete-btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-empty']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-loading']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-load-more']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-overlay']} */ ;
 /** @type {__VLS_StyleScopedClasses['chat-header']} */ ;
 /** @type {__VLS_StyleScopedClasses['header-left']} */ ;
+/** @type {__VLS_StyleScopedClasses['sidebar-toggle-btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['header-title']} */ ;
 /** @type {__VLS_StyleScopedClasses['header-right']} */ ;
 /** @type {__VLS_StyleScopedClasses['header-icon-button']} */ ;
@@ -1245,8 +1613,10 @@ const __VLS_self = (await import('vue')).defineComponent({
             AudioOutlined: AudioOutlined,
             CheckCircleFilled: CheckCircleFilled,
             CloseCircleFilled: CloseCircleFilled,
+            DeleteOutlined: DeleteOutlined,
             DownOutlined: DownOutlined,
             LoadingOutlined: LoadingOutlined,
+            MenuOutlined: MenuOutlined,
             PauseCircleOutlined: PauseCircleOutlined,
             PlusOutlined: PlusOutlined,
             RobotOutlined: RobotOutlined,
@@ -1270,10 +1640,24 @@ const __VLS_self = (await import('vue')).defineComponent({
             msgContainer: msgContainer,
             thoughtOpen: thoughtOpen,
             expandedSteps: expandedSteps,
+            conversationId: conversationId,
+            conversationList: conversationList,
+            loadingConversations: loadingConversations,
+            switchingConversationId: switchingConversationId,
+            deletingConversationId: deletingConversationId,
+            hasMoreConversations: hasMoreConversations,
+            isMobile: isMobile,
+            sidebarVisible: sidebarVisible,
             speech: speech,
             synth: synth,
+            speechPlaceholder: speechPlaceholder,
+            formatTime: formatTime,
+            loadMoreConversations: loadMoreConversations,
+            deleteConversationItem: deleteConversationItem,
+            switchConversation: switchConversation,
             handleNewConversation: handleNewConversation,
-            toggleSpeechInput: toggleSpeechInput,
+            startSpeechInput: startSpeechInput,
+            stopSpeechInput: stopSpeechInput,
             toggleSpeechOutput: toggleSpeechOutput,
             safeSend: safeSend,
             handleLogout: handleLogout,

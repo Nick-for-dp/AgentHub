@@ -2,7 +2,9 @@ from fastapi import APIRouter, Depends
 
 from app.api.v1.endpoints import (
     agents,
+    analytics,
     api_keys,
+    audio,
     auth,
     chat,
     conversations,
@@ -27,6 +29,9 @@ api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 
 # conversations 是用户产品会话接口，endpoint 内部要求 Cookie 用户会话。
 api_router.include_router(conversations.router, prefix="/conversations", tags=["conversations"])
+
+# audio 是语音转写/合成接口，endpoint 内部要求 Cookie Session 或 API Key。
+api_router.include_router(audio.router, prefix="/audio", tags=["audio"])
 
 # 所有 /admin/* 路由统一要求：
 # 1. API Key 认证（get_current_subject）—— 验证"你是谁"
@@ -85,6 +90,12 @@ api_router.include_router(
     leads.router,
     prefix="/admin/leads",
     tags=["admin-leads"],
+    dependencies=_admin_deps,
+)
+api_router.include_router(
+    analytics.router,
+    prefix="/admin/analytics",
+    tags=["admin-analytics"],
     dependencies=_admin_deps,
 )
 api_router.include_router(

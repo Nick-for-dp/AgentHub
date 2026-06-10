@@ -10,6 +10,7 @@ from app.core.enums import (
     CallerType,
     PolicyEffect,
     ResourceStatus,
+    ResourceType,
     SubjectType,
 )
 from app.core.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
@@ -165,6 +166,7 @@ class AuthService:
             phone=user.phone_normalized,
             org_unit_id=user.org_unit_id,
             org_unit_name=org_unit.name if org_unit else None,
+            is_admin=self._has_admin_permission(user),
         )
 
     def authenticate_bearer_token(self, raw_token: str) -> AuthenticatedSubject:
@@ -378,12 +380,25 @@ class AuthService:
                 phone=user.phone_normalized,
                 org_unit_id=user.org_unit_id,
                 org_unit_name=org_unit.name if org_unit else None,
+                is_admin=self._has_admin_permission(user),
             ),
             access_expires_at=access_expires_at,
             idle_expires_at=idle_expires_at,
             expires_in=max(0, int((access_expires_at - now).total_seconds())),
             idle_expires_in=max(0, int((idle_expires_at - now).total_seconds())),
         )
+
+    def _has_admin_permission(self, user: UserAccount) -> bool:
+        subject = AuthenticatedSubject(
+            caller_type=CallerType.USER,
+            user_id=user.id,
+            org_unit_id=user.org_unit_id,
+        )
+        try:
+            self.assert_allowed(subject, ResourceType.API, "*", "manage")
+        except ForbiddenError:
+            return False
+        return True
 
     @staticmethod
     def _hash_optional(value: str | None) -> str | None:

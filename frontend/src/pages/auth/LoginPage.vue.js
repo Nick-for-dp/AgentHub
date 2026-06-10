@@ -11,7 +11,7 @@ async function handleLogin() {
     errorMsg.value = '';
     try {
         await auth.login(form.phone, form.password);
-        router.replace('/chat');
+        router.replace(auth.defaultHomePath);
     }
     catch (err) {
         const e = err;

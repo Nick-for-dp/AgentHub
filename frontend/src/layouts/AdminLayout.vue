@@ -30,6 +30,10 @@
           <template #icon><SolutionOutlined /></template>
           <router-link to="/admin/leads">线索记录</router-link>
         </a-menu-item>
+        <a-menu-item key="/admin/analytics">
+          <template #icon><BarChartOutlined /></template>
+          <router-link to="/admin/analytics">数据分析</router-link>
+        </a-menu-item>
       </a-menu>
     </a-layout-sider>
     <a-layout>
@@ -66,7 +70,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { BookOutlined, HistoryOutlined, KeyOutlined, RobotOutlined, SolutionOutlined } from '@ant-design/icons-vue'
+import { BarChartOutlined, BookOutlined, HistoryOutlined, KeyOutlined, RobotOutlined, SolutionOutlined } from '@ant-design/icons-vue'
 
 import { useAuthStore } from '../stores/auth'
 

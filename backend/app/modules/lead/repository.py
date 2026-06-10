@@ -100,9 +100,6 @@ class LeadRepository:
         *,
         keyword: str | None = None,
         status: str | None = None,
-        agent_code: str | None = None,
-        region: str | None = None,
-        has_contact: bool | None = None,
         created_from: datetime | None = None,
         created_to: datetime | None = None,
         page: int = 1,
@@ -127,20 +124,6 @@ class LeadRepository:
             )
         if status:
             stmt = stmt.where(SalesLead.status == status)
-        if agent_code:
-            stmt = stmt.where(SalesLead.agent_code == agent_code)
-        if region:
-            stmt = stmt.where(SalesLead.region.ilike(f"%{region.strip()}%"))
-        if has_contact is True:
-            stmt = stmt.where(LeadContact.contact_value.is_not(None), LeadContact.contact_value != "")
-        elif has_contact is False:
-            stmt = stmt.where(
-                or_(
-                    SalesLead.contact_id.is_(None),
-                    LeadContact.contact_value.is_(None),
-                    LeadContact.contact_value == "",
-                )
-            )
         if created_from:
             stmt = stmt.where(SalesLead.created_at >= created_from)
         if created_to:

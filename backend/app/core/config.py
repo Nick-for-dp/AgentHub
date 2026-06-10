@@ -30,6 +30,18 @@ class Settings(BaseSettings):
     # Dify 集成配置
     dify_base_url: str | None = None
     dify_api_key: str | None = None
+    # 火山引擎语音配置（新版控制台，使用 X-Api-Key）
+    volc_audio_api_key: str | None = None
+    volc_asr_ws_url: str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream"
+    volc_asr_resource_id: str = "volc.bigasr.sauc.duration"
+    volc_asr_audio_format: str = "pcm"
+    volc_asr_sample_rate: int = 16000
+    volc_asr_language: str = "zh-CN"
+    volc_tts_ws_url: str = "wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream"
+    volc_tts_resource_id: str = "seed-tts-2.0"
+    volc_tts_speaker: str | None = None
+    volc_tts_audio_format: str = "mp3"
+    volc_tts_sample_rate: int = 24000
     log_level: str = "INFO"
 
     model_config = SettingsConfigDict(

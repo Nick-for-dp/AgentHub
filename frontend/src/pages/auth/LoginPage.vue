@@ -67,7 +67,7 @@ async function handleLogin() {
   errorMsg.value = ''
   try {
     await auth.login(form.phone, form.password)
-    router.replace('/chat')
+    router.replace(auth.defaultHomePath)
   } catch (err: unknown) {
     const e = err as { response?: { status?: number; data?: { message?: string } } }
     if (e.response?.status === 401) {

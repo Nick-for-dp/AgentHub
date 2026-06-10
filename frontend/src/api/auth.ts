@@ -13,6 +13,7 @@ export interface UserSummary {
   phone: string | null
   org_unit_id: string
   org_unit_name: string | null
+  is_admin: boolean
 }
 
 export interface SessionResponse {

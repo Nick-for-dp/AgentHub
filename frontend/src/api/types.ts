@@ -266,11 +266,77 @@ export interface SalesLeadPage {
 export interface SalesLeadFilter {
   keyword?: string
   status?: string
-  agent_code?: string
-  region?: string
-  has_contact?: boolean
   created_from?: string
   created_to?: string
+  page?: number
+  page_size?: number
+}
+
+// ======================== Analytics ========================
+
+/** 单日活跃用户数 */
+export interface DAUItem {
+  date: string
+  active_users: number
+}
+
+/** 用户消息发送次数排行条目 */
+export interface UserMessageCountItem {
+  user_id: string
+  user_name?: string
+  phone_normalized?: string
+  org_unit_name?: string
+  message_count: number
+  last_message_at?: string
+  agent_codes: string[]
+}
+
+export interface UserMessageCountPage {
+  items: UserMessageCountItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+/** 用户聊天活跃跨度（根据消息时间估算） */
+export interface UserChatDurationItem {
+  user_id: string
+  user_name?: string
+  chat_date: string
+  first_message_at?: string
+  last_message_at?: string
+  duration_seconds: number
+  message_count: number
+}
+
+export interface UserChatDurationPage {
+  items: UserChatDurationItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+/** 智能体业务追问次数 */
+export interface AgentBusinessFollowupItem {
+  agent_code?: string
+  agent_name?: string
+  followup_count: number
+}
+
+export interface AgentBusinessFollowupPage {
+  items: AgentBusinessFollowupItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+/** 统计指标通用筛选参数 */
+export interface AnalyticsFilter {
+  created_from?: string
+  created_to?: string
+  agent_code?: string
+  user_id?: string
+  org_unit_id?: string
   page?: number
   page_size?: number
 }

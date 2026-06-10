@@ -1,9 +1,88 @@
 <template>
   <main class="chat-page">
-    <section class="chat-panel">
+    <!-- 历史会话侧边栏 -->
+    <aside
+      v-if="auth.isLoggedIn"
+      :class="['conversation-sidebar', {
+        'sidebar-open': sidebarVisible,
+        'sidebar-collapsed': !sidebarVisible,
+        'sidebar-mobile': isMobile
+      }]"
+    >
+      <div class="sidebar-header">
+        <span class="sidebar-title">历史会话</span>
+      </div>
+      <div class="sidebar-list">
+        <div
+          v-for="conv in conversationList"
+          :key="conv.id"
+          :class="['sidebar-item', {
+            active: conv.id === conversationId,
+            switching: conv.id === switchingConversationId,
+          }]"
+          @click="switchConversation(conv.id)"
+        >
+          <span class="sidebar-item-main">
+            <span class="sidebar-item-title">{{ conv.title || '新对话' }}</span>
+            <span class="sidebar-item-time">{{ formatTime(conv.last_message_at) }}</span>
+          </span>
+          <a-popconfirm
+            title="确认删除该会话？"
+            ok-text="删除"
+            cancel-text="取消"
+            placement="right"
+            @confirm="deleteConversationItem(conv.id)"
+          >
+            <button
+              type="button"
+              class="sidebar-delete-btn"
+              title="删除会话"
+              :disabled="deletingConversationId === conv.id"
+              @click.stop
+            >
+              <DeleteOutlined />
+            </button>
+          </a-popconfirm>
+        </div>
+        <div v-if="conversationList.length === 0 && !loadingConversations" class="sidebar-empty">
+          暂无历史会话
+        </div>
+        <div v-if="loadingConversations" class="sidebar-loading">
+          正在加载...
+        </div>
+        <a-button
+          v-else-if="hasMoreConversations"
+          block
+          size="small"
+          class="sidebar-load-more"
+          @click="loadMoreConversations"
+        >
+          加载更多
+        </a-button>
+      </div>
+    </aside>
+
+    <!-- 移动端遮罩 -->
+    <div
+      v-if="isMobile && sidebarVisible"
+      class="sidebar-overlay"
+      @click="sidebarVisible = false"
+    />
+
+    <section :class="['chat-panel', { 'sidebar-hidden-panel': !auth.isLoggedIn || !sidebarVisible }]">
       <!-- 顶栏 -->
       <header class="chat-header">
         <div class="header-left">
+          <button
+            v-if="auth.isLoggedIn"
+            type="button"
+            class="sidebar-toggle-btn"
+            :title="sidebarVisible ? '收起历史会话' : '展开历史会话'"
+            :aria-label="sidebarVisible ? '收起历史会话' : '展开历史会话'"
+            @click="sidebarVisible = !sidebarVisible"
+          >
+            <MenuOutlined />
+          </button>
           <span class="header-title">智能问答</span>
         </div>
 
@@ -127,6 +206,7 @@
             <a-button
               size="small"
               type="link"
+              :loading="synth.isLoading.value"
               :title="synth.isSpeaking.value ? '停止播报' : '播报回复'"
               @click="toggleSpeechOutput(msg.content)"
             >
@@ -146,13 +226,12 @@
       <a-alert
         v-if="errorMsg"
         type="error"
+        :message="errorMsg"
         show-icon
         closable
         class="error-bar"
         @close="errorMsg = ''"
-      >
-        {{ errorMsg }}
-      </a-alert>
+      />
 
       <!-- 输入区 -->
       <footer class="composer">
@@ -160,21 +239,26 @@
           v-model:value="question"
           class="composer-input"
           :auto-size="{ minRows: 1, maxRows: 4 }"
-          :placeholder="speech.isListening.value ? '正在聆听...' : '输入问题，Enter 发送'"
-          :disabled="!canChat || speech.isListening.value"
+          :placeholder="speechPlaceholder"
+          :disabled="!canChat || speech.isRecording.value || speech.isTranscribing.value"
           @press-enter.prevent="safeSend"
         />
         <a-button
           v-if="speech.isSupported.value"
-          :type="speech.isListening.value ? 'primary' : 'default'"
-          :danger="speech.isListening.value"
-          :title="speech.isListening.value ? '停止聆听' : '语音输入'"
+          :type="speech.isRecording.value ? 'primary' : 'default'"
+          :danger="speech.isRecording.value"
+          :loading="speech.isTranscribing.value"
+          :title="speech.isRecording.value ? '松开结束录音' : '长按语音输入'"
           size="large"
           class="composer-icon-button"
-          @click="toggleSpeechInput"
+          @mousedown.prevent="startSpeechInput"
+          @mouseup.prevent="stopSpeechInput"
+          @mouseleave.prevent="stopSpeechInput"
+          @touchstart.prevent="startSpeechInput"
+          @touchend.prevent="stopSpeechInput"
         >
           <template #icon>
-            <PauseCircleOutlined v-if="speech.isListening.value" />
+            <PauseCircleOutlined v-if="speech.isRecording.value" />
             <AudioOutlined v-else />
           </template>
         </a-button>
@@ -200,8 +284,10 @@ import {
   AudioOutlined,
   CheckCircleFilled,
   CloseCircleFilled,
+  DeleteOutlined,
   DownOutlined,
   LoadingOutlined,
+  MenuOutlined,
   PauseCircleOutlined,
   PlusOutlined,
   RobotOutlined,
@@ -213,16 +299,17 @@ import DOMPurify from 'dompurify'
 import { streamChat } from '../../api/chat'
 import type { ChatError, StreamEvent } from '../../api/chat'
 import {
-  archiveConversation,
   createConversation,
+  deleteConversation,
   getConversation,
   getConversationMessages,
   getCurrentConversation,
+  listConversations,
 } from '../../api/conversations'
-import type { ConversationMessage } from '../../api/conversations'
+import type { Conversation, ConversationMessage } from '../../api/conversations'
 import { useAuthStore } from '../../stores/auth'
-import { useSpeechRecognition } from '../../composables/useSpeechRecognition'
-import { useSpeechSynthesis } from '../../composables/useSpeechSynthesis'
+import { useCloudSpeechRecognition } from '../../composables/useCloudSpeechRecognition'
+import { useCloudSpeechSynthesis } from '../../composables/useCloudSpeechSynthesis'
 
 // 配置 marked
 marked.setOptions({ breaks: true, gfm: true })
@@ -425,9 +512,26 @@ const thoughtOpen = ref(true)
 const expandedSteps = ref<Record<string, boolean>>({})
 const conversationId = ref<string | null>(null)
 const conversationTitle = ref('')
+const conversationList = ref<Conversation[]>([])
+const loadingConversations = ref(false)
+const conversationPage = ref(1)
+const conversationTotal = ref(0)
+const conversationPageSize = 30
+const switchingConversationId = ref<string | null>(null)
+const deletingConversationId = ref<string | null>(null)
+let switchRequestSeq = 0
+const hasMoreConversations = computed(() => conversationList.value.length < conversationTotal.value)
+const windowWidth = ref(window.innerWidth)
+const isMobile = computed(() => windowWidth.value < 768)
+const sidebarVisible = ref(window.innerWidth >= 768)
 // 语音能力
-const speech = useSpeechRecognition()
-const synth = useSpeechSynthesis()
+const speech = useCloudSpeechRecognition()
+const synth = useCloudSpeechSynthesis()
+const speechPlaceholder = computed(() => {
+  if (speech.isRecording.value) return '正在录音，松开发送识别'
+  if (speech.isTranscribing.value) return '正在转写语音...'
+  return '输入问题，Enter 发送'
+})
 
 // 节点事件通常会在几十毫秒内连续到达。这里用前端队列把步骤逐个展示，
 // 同时保证每一步至少可见一小段时间，避免用户看到“一整串步骤瞬间出现”。
@@ -448,17 +552,124 @@ function syncConversationUrl(id: string | null): void {
   void router.replace({ query })
 }
 
+function formatTime(isoString: string): string {
+  const date = new Date(isoString)
+  const now = new Date()
+  const isToday = date.toDateString() === now.toDateString()
+  if (isToday) {
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  }
+  return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+}
+
+function mergeConversationList(items: Conversation[], append: boolean): void {
+  const existing = append ? conversationList.value : []
+  const byId = new Map(existing.map(item => [item.id, item]))
+  for (const item of items) {
+    byId.set(item.id, item)
+  }
+  conversationList.value = Array.from(byId.values()).sort(
+    (a, b) => new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime(),
+  )
+}
+
+async function loadConversationList(page = 1, append = false): Promise<void> {
+  if (!auth.isLoggedIn) return
+  loadingConversations.value = true
+  try {
+    const result = await listConversations(agentCode.value, page, conversationPageSize)
+    conversationPage.value = result.page
+    conversationTotal.value = result.total
+    mergeConversationList(result.items, append)
+  } catch {
+    // 静默失败，不影响聊天主体验
+  } finally {
+    loadingConversations.value = false
+  }
+}
+
+async function refreshConversationList(): Promise<void> {
+  await loadConversationList(1, false)
+}
+
+async function loadMoreConversations(): Promise<void> {
+  if (loadingConversations.value || !hasMoreConversations.value) return
+  await loadConversationList(conversationPage.value + 1, true)
+}
+
+async function deleteConversationItem(id: string): Promise<void> {
+  if (deletingConversationId.value || loading.value) return
+  deletingConversationId.value = id
+  errorMsg.value = ''
+  try {
+    await deleteConversation(id)
+    conversationList.value = conversationList.value.filter(item => item.id !== id)
+    conversationTotal.value = Math.max(0, conversationTotal.value - 1)
+    if (conversationId.value === id) {
+      conversationId.value = null
+      conversationTitle.value = ''
+      messages.value = []
+      expandedSteps.value = {}
+      syncConversationUrl(null)
+    }
+  } catch {
+    errorMsg.value = '删除会话失败，请稍后重试'
+  } finally {
+    deletingConversationId.value = null
+  }
+}
+
+async function switchConversation(id: string): Promise<void> {
+  if (id === conversationId.value || loading.value) return
+  const requestSeq = ++switchRequestSeq
+  switchingConversationId.value = id
+  errorMsg.value = ''
+  if (isMobile.value) {
+    sidebarVisible.value = false
+  }
+  try {
+    const [conversation, storedMessages] = await Promise.all([
+      getConversation(id),
+      getConversationMessages(id),
+    ])
+    if (requestSeq !== switchRequestSeq) return
+    if (conversation.agent_code !== agentCode.value) {
+      throw new Error('conversation agent mismatch')
+    }
+    conversationId.value = conversation.id
+    conversationTitle.value = conversation.title
+    messages.value = storedMessages
+      .map(mapConversationMessage)
+      .filter((item): item is Message => item !== null)
+    syncConversationUrl(conversation.id)
+    await scrollBottom()
+  } catch {
+    if (requestSeq !== switchRequestSeq) return
+    errorMsg.value = '切换会话失败，请稍后重试'
+  } finally {
+    if (requestSeq === switchRequestSeq) {
+      switchingConversationId.value = null
+    }
+  }
+}
+
 async function restoreCurrentConversation(): Promise<void> {
   if (!auth.isLoggedIn) return
   restoringConversation.value = true
   try {
     const routeConversationId = router.currentRoute.value.query.conversation_id
     const requestedId = typeof routeConversationId === 'string' ? routeConversationId : null
-    const currentState = requestedId ? null : await getCurrentConversation(agentCode.value)
-    const current = requestedId ? await getConversation(requestedId) : currentState?.conversation
-    const storedMessages = requestedId
+    let currentState = requestedId ? null : await getCurrentConversation(agentCode.value)
+    let current = requestedId ? await getConversation(requestedId) : currentState?.conversation
+    let storedMessages = requestedId
       ? await getConversationMessages(requestedId)
       : currentState?.messages ?? []
+    if (current && current.agent_code !== agentCode.value) {
+      syncConversationUrl(null)
+      currentState = await getCurrentConversation(agentCode.value)
+      current = currentState.conversation
+      storedMessages = currentState.messages
+    }
     conversationId.value = current?.id ?? null
     conversationTitle.value = current?.title ?? ''
     messages.value = storedMessages
@@ -476,13 +687,6 @@ async function restoreCurrentConversation(): Promise<void> {
 async function handleNewConversation(): Promise<void> {
   if (loading.value) return
   errorMsg.value = ''
-  if (conversationId.value) {
-    try {
-      await archiveConversation(conversationId.value)
-    } catch {
-      // 新对话体验优先，归档失败不阻断创建新上下文。
-    }
-  }
   const conversation = await createConversation(agentCode.value)
   conversationId.value = conversation.id
   conversationTitle.value = conversation.title
@@ -490,6 +694,10 @@ async function handleNewConversation(): Promise<void> {
   expandedSteps.value = {}
   syncConversationUrl(conversation.id)
   await scrollBottom()
+  if (isMobile.value) {
+    sidebarVisible.value = false
+  }
+  await refreshConversationList()
 }
 
 function scheduleStepTimer(callback: () => void, delayMs: number): void {
@@ -627,19 +835,43 @@ function enqueueStepUpdate(message: Message, node: NodeEventPayload, eventName?:
   void drainStepQueue()
 }
 
-// 语音输入：将识别结果填入输入框，识别结束时可自动发送
-function toggleSpeechInput(): void {
-  if (speech.isListening.value) {
-    speech.stop()
-    // 识别结束后将文本写入输入框
-    if (speech.transcript.value) {
-      question.value = speech.transcript.value
-      speech.clearTranscript()
-    }
-  } else {
+// 语音输入：长按录音，松开后将云端识别结果填入输入框
+function startSpeechInput(): void {
+  if (speech.isRecording.value || speech.isTranscribing.value || !canChat.value) return
+  speech.clearTranscript()
+  void speech.start({
+    onEnd: (text) => {
+      void finishSpeechInput(text)
+    },
+    onError: (error) => {
+      errorMsg.value = getSpeechErrorMessage(error)
+    },
+  })
+}
+
+function stopSpeechInput(): void {
+  if (!speech.isRecording.value) return
+  void speech.stop()
+}
+
+function finishSpeechInput(text: string): void {
+  const recognizedText = (text || speech.transcript.value).trim()
+  if (!recognizedText) {
     speech.clearTranscript()
-    speech.start()
+    return
   }
+  question.value = recognizedText
+  speech.clearTranscript()
+}
+
+function getSpeechErrorMessage(error: string): string {
+  if (error.includes('Permission') || error.includes('NotAllowed')) {
+    return '浏览器未允许使用麦克风，请检查权限设置'
+  }
+  if (error.includes('uploaded WAV')) {
+    return '录音格式不符合要求，请重试'
+  }
+  return error || '语音输入失败，请重试'
 }
 
 // 语音播报：播放/停止
@@ -647,7 +879,7 @@ function toggleSpeechOutput(text: string): void {
   if (synth.isSpeaking.value) {
     synth.stop()
   } else {
-    synth.speak(text)
+    void synth.speak(text)
   }
 }
 
@@ -711,11 +943,24 @@ function stopTypewriter() {
   typewriterCursors.value.clear()
 }
 
+function onWindowResize(): void {
+  const wasMobile = isMobile.value
+  windowWidth.value = window.innerWidth
+  if (wasMobile && !isMobile.value) {
+    sidebarVisible.value = true
+  }
+}
+
 onMounted(() => {
+  window.addEventListener('resize', onWindowResize)
   void restoreCurrentConversation()
+  if (auth.isLoggedIn) {
+    void refreshConversationList()
+  }
 })
 
 onUnmounted(() => {
+  window.removeEventListener('resize', onWindowResize)
   if (scrollTimer) {
     clearTimeout(scrollTimer)
     scrollTimer = null
@@ -763,8 +1008,10 @@ function scheduleScrollLatest(behavior: ScrollBehavior = 'auto'): void {
 
 // ── 发送消息 ───────────────────────────────
 async function send() {
-  const current = question.value.trim()
+  const current = (question.value || speech.transcript.value).trim()
   if (!current || loading.value || !canChat.value) return
+  question.value = current
+  speech.clearTranscript()
 
   errorMsg.value = ''
   thoughtOpen.value = true
@@ -858,6 +1105,13 @@ async function send() {
   } finally {
     assistantMsg.isStreaming = false
     loading.value = false
+    if (auth.isLoggedIn) {
+      await refreshConversationList()
+      const currentConversation = conversationList.value.find(item => item.id === conversationId.value)
+      if (currentConversation) {
+        conversationTitle.value = currentConversation.title
+      }
+    }
     await scrollBottom()
   }
 }
@@ -867,12 +1121,198 @@ async function send() {
 /* ---- 页面背景 ---- */
 .chat-page {
   min-height: 100dvh;
-  display: grid;
-  place-items: stretch center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
   padding: 28px 24px;
   background:
     linear-gradient(90deg, rgba(234, 245, 255, 0.72) 0%, rgba(245, 247, 250, 0) 34%),
     linear-gradient(180deg, #f8fbff 0%, var(--color-bg-page) 52%, #eef4f9 100%);
+}
+
+/* ---- 历史会话侧边栏 ---- */
+.conversation-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  height: calc(100dvh - 56px);
+  min-height: 640px;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-white);
+  border: 1px solid var(--color-border);
+  border-right: none;
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  box-shadow: 0 18px 52px rgba(15, 23, 42, 0.09), 0 2px 8px rgba(15, 23, 42, 0.04);
+  overflow: hidden;
+  transition: width 0.22s ease, opacity 0.18s ease, border-width 0.18s ease;
+}
+
+.conversation-sidebar.sidebar-collapsed {
+  width: 0;
+  min-width: 0;
+  border-width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.conversation-sidebar.sidebar-collapsed + .chat-panel {
+  border-radius: var(--radius-lg);
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 58px;
+  padding: 10px 16px 10px 20px;
+  border-bottom: 1px solid var(--color-border);
+  background:
+    linear-gradient(90deg, rgba(223, 241, 255, 0.96) 0%, rgba(245, 250, 255, 0.98) 46%, rgba(255, 255, 255, 0.98) 100%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 251, 255, 0.94) 100%);
+}
+
+.sidebar-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.sidebar-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.sidebar-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 4px;
+  min-height: 52px;
+  padding: 8px 8px 8px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.sidebar-item:hover {
+  background: var(--color-primary-bg);
+}
+
+.sidebar-item.active {
+  background: var(--color-primary-bg);
+  box-shadow: inset 0 0 0 1px var(--color-primary-border);
+}
+
+.sidebar-item.switching {
+  opacity: 0.68;
+  pointer-events: none;
+}
+
+.sidebar-item-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar-item-title {
+  font-size: 14px;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-item-time {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.sidebar-delete-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.sidebar-item:hover .sidebar-delete-btn,
+.sidebar-delete-btn:focus-visible {
+  opacity: 1;
+}
+
+.sidebar-delete-btn:hover,
+.sidebar-delete-btn:focus-visible {
+  background: #fef2f2;
+  color: var(--color-error);
+  outline: none;
+}
+
+.sidebar-delete-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.sidebar-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+}
+
+.sidebar-loading {
+  padding: 14px 12px;
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+}
+
+.sidebar-load-more {
+  margin-top: 8px;
+  color: var(--color-primary);
+  border-color: var(--color-primary-border);
+}
+
+.sidebar-toggle-btn {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.sidebar-toggle-btn:hover,
+.sidebar-toggle-btn:focus-visible {
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+}
+
+.sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+  background: rgba(0, 0, 0, 0.3);
 }
 
 /* ---- 面板 ---- */
@@ -884,9 +1324,13 @@ async function send() {
   grid-template-rows: auto 1fr auto auto;
   background: var(--color-bg-white);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
   box-shadow: 0 18px 52px rgba(15, 23, 42, 0.09), 0 2px 8px rgba(15, 23, 42, 0.04);
   overflow: hidden;
+}
+
+.chat-panel.sidebar-hidden-panel {
+  border-radius: var(--radius-lg);
 }
 
 /* ---- 顶栏 ---- */
@@ -897,7 +1341,7 @@ async function send() {
   align-items: center;
   gap: 16px;
   min-height: 58px;
-  padding: 10px 18px 10px 22px;
+  padding: 10px 18px 10px 16px;
   border-bottom: 1px solid var(--color-border);
   background:
     linear-gradient(90deg, rgba(223, 241, 255, 0.96) 0%, rgba(245, 250, 255, 0.98) 46%, rgba(255, 255, 255, 0.98) 100%),
@@ -920,7 +1364,7 @@ async function send() {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 .header-title {
   position: relative;
@@ -1415,9 +1859,28 @@ async function send() {
   margin: 0;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 767px) {
   .chat-page {
     padding: 0;
+  }
+
+  .conversation-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 100;
+    width: 260px;
+    height: 100dvh;
+    min-height: auto;
+    border-radius: 0;
+    border-right: 1px solid var(--color-border);
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+  }
+
+  .conversation-sidebar.sidebar-open {
+    transform: translateX(0);
   }
 
   .chat-panel {

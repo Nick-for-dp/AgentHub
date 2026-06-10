@@ -1,6 +1,6 @@
 import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { BookOutlined, HistoryOutlined, KeyOutlined, RobotOutlined, SolutionOutlined } from '@ant-design/icons-vue';
+import { BarChartOutlined, BookOutlined, HistoryOutlined, KeyOutlined, RobotOutlined, SolutionOutlined } from '@ant-design/icons-vue';
 import { useAuthStore } from '../stores/auth';
 const auth = useAuthStore();
 const route = useRoute();
@@ -222,24 +222,54 @@ const __VLS_71 = __VLS_70({
 __VLS_72.slots.default;
 var __VLS_72;
 var __VLS_64;
+const __VLS_73 = {}.AMenuItem;
+/** @type {[typeof __VLS_components.AMenuItem, typeof __VLS_components.aMenuItem, typeof __VLS_components.AMenuItem, typeof __VLS_components.aMenuItem, ]} */ ;
+// @ts-ignore
+const __VLS_74 = __VLS_asFunctionalComponent(__VLS_73, new __VLS_73({
+    key: "/admin/analytics",
+}));
+const __VLS_75 = __VLS_74({
+    key: "/admin/analytics",
+}, ...__VLS_functionalComponentArgsRest(__VLS_74));
+__VLS_76.slots.default;
+{
+    const { icon: __VLS_thisSlot } = __VLS_76.slots;
+    const __VLS_77 = {}.BarChartOutlined;
+    /** @type {[typeof __VLS_components.BarChartOutlined, ]} */ ;
+    // @ts-ignore
+    const __VLS_78 = __VLS_asFunctionalComponent(__VLS_77, new __VLS_77({}));
+    const __VLS_79 = __VLS_78({}, ...__VLS_functionalComponentArgsRest(__VLS_78));
+}
+const __VLS_81 = {}.RouterLink;
+/** @type {[typeof __VLS_components.RouterLink, typeof __VLS_components.routerLink, typeof __VLS_components.RouterLink, typeof __VLS_components.routerLink, ]} */ ;
+// @ts-ignore
+const __VLS_82 = __VLS_asFunctionalComponent(__VLS_81, new __VLS_81({
+    to: "/admin/analytics",
+}));
+const __VLS_83 = __VLS_82({
+    to: "/admin/analytics",
+}, ...__VLS_functionalComponentArgsRest(__VLS_82));
+__VLS_84.slots.default;
+var __VLS_84;
+var __VLS_76;
 var __VLS_12;
 var __VLS_8;
-const __VLS_73 = {}.ALayout;
+const __VLS_85 = {}.ALayout;
 /** @type {[typeof __VLS_components.ALayout, typeof __VLS_components.aLayout, typeof __VLS_components.ALayout, typeof __VLS_components.aLayout, ]} */ ;
 // @ts-ignore
-const __VLS_74 = __VLS_asFunctionalComponent(__VLS_73, new __VLS_73({}));
-const __VLS_75 = __VLS_74({}, ...__VLS_functionalComponentArgsRest(__VLS_74));
-__VLS_76.slots.default;
-const __VLS_77 = {}.ALayoutHeader;
+const __VLS_86 = __VLS_asFunctionalComponent(__VLS_85, new __VLS_85({}));
+const __VLS_87 = __VLS_86({}, ...__VLS_functionalComponentArgsRest(__VLS_86));
+__VLS_88.slots.default;
+const __VLS_89 = {}.ALayoutHeader;
 /** @type {[typeof __VLS_components.ALayoutHeader, typeof __VLS_components.aLayoutHeader, typeof __VLS_components.ALayoutHeader, typeof __VLS_components.aLayoutHeader, ]} */ ;
 // @ts-ignore
-const __VLS_78 = __VLS_asFunctionalComponent(__VLS_77, new __VLS_77({
+const __VLS_90 = __VLS_asFunctionalComponent(__VLS_89, new __VLS_89({
     ...{ class: "admin-header" },
 }));
-const __VLS_79 = __VLS_78({
+const __VLS_91 = __VLS_90({
     ...{ class: "admin-header" },
-}, ...__VLS_functionalComponentArgsRest(__VLS_78));
-__VLS_80.slots.default;
+}, ...__VLS_functionalComponentArgsRest(__VLS_90));
+__VLS_92.slots.default;
 __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
     ...{ class: "header-title" },
 });
@@ -247,18 +277,18 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.d
     ...{ class: "header-key-area" },
 });
 if (__VLS_ctx.auth.isLoggedIn && __VLS_ctx.auth.currentUser) {
-    const __VLS_81 = {}.ADropdown;
+    const __VLS_93 = {}.ADropdown;
     /** @type {[typeof __VLS_components.ADropdown, typeof __VLS_components.aDropdown, typeof __VLS_components.ADropdown, typeof __VLS_components.aDropdown, ]} */ ;
     // @ts-ignore
-    const __VLS_82 = __VLS_asFunctionalComponent(__VLS_81, new __VLS_81({
+    const __VLS_94 = __VLS_asFunctionalComponent(__VLS_93, new __VLS_93({
         trigger: "click",
         placement: "bottomRight",
     }));
-    const __VLS_83 = __VLS_82({
+    const __VLS_95 = __VLS_94({
         trigger: "click",
         placement: "bottomRight",
-    }, ...__VLS_functionalComponentArgsRest(__VLS_82));
-    __VLS_84.slots.default;
+    }, ...__VLS_functionalComponentArgsRest(__VLS_94));
+    __VLS_96.slots.default;
     __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
         type: "button",
         ...{ class: "admin-avatar-button" },
@@ -269,73 +299,73 @@ if (__VLS_ctx.auth.isLoggedIn && __VLS_ctx.auth.currentUser) {
     });
     (__VLS_ctx.getUserInitial(__VLS_ctx.auth.currentUser.name));
     {
-        const { overlay: __VLS_thisSlot } = __VLS_84.slots;
-        const __VLS_85 = {}.AMenu;
+        const { overlay: __VLS_thisSlot } = __VLS_96.slots;
+        const __VLS_97 = {}.AMenu;
         /** @type {[typeof __VLS_components.AMenu, typeof __VLS_components.aMenu, typeof __VLS_components.AMenu, typeof __VLS_components.aMenu, ]} */ ;
         // @ts-ignore
-        const __VLS_86 = __VLS_asFunctionalComponent(__VLS_85, new __VLS_85({}));
-        const __VLS_87 = __VLS_86({}, ...__VLS_functionalComponentArgsRest(__VLS_86));
-        __VLS_88.slots.default;
-        const __VLS_89 = {}.AMenuItem;
+        const __VLS_98 = __VLS_asFunctionalComponent(__VLS_97, new __VLS_97({}));
+        const __VLS_99 = __VLS_98({}, ...__VLS_functionalComponentArgsRest(__VLS_98));
+        __VLS_100.slots.default;
+        const __VLS_101 = {}.AMenuItem;
         /** @type {[typeof __VLS_components.AMenuItem, typeof __VLS_components.aMenuItem, typeof __VLS_components.AMenuItem, typeof __VLS_components.aMenuItem, ]} */ ;
         // @ts-ignore
-        const __VLS_90 = __VLS_asFunctionalComponent(__VLS_89, new __VLS_89({
+        const __VLS_102 = __VLS_asFunctionalComponent(__VLS_101, new __VLS_101({
             key: "user",
             disabled: true,
         }));
-        const __VLS_91 = __VLS_90({
+        const __VLS_103 = __VLS_102({
             key: "user",
             disabled: true,
-        }, ...__VLS_functionalComponentArgsRest(__VLS_90));
-        __VLS_92.slots.default;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_102));
+        __VLS_104.slots.default;
         (__VLS_ctx.auth.currentUser.name);
-        var __VLS_92;
-        const __VLS_93 = {}.AMenuDivider;
+        var __VLS_104;
+        const __VLS_105 = {}.AMenuDivider;
         /** @type {[typeof __VLS_components.AMenuDivider, typeof __VLS_components.aMenuDivider, ]} */ ;
         // @ts-ignore
-        const __VLS_94 = __VLS_asFunctionalComponent(__VLS_93, new __VLS_93({}));
-        const __VLS_95 = __VLS_94({}, ...__VLS_functionalComponentArgsRest(__VLS_94));
-        const __VLS_97 = {}.AMenuItem;
+        const __VLS_106 = __VLS_asFunctionalComponent(__VLS_105, new __VLS_105({}));
+        const __VLS_107 = __VLS_106({}, ...__VLS_functionalComponentArgsRest(__VLS_106));
+        const __VLS_109 = {}.AMenuItem;
         /** @type {[typeof __VLS_components.AMenuItem, typeof __VLS_components.aMenuItem, typeof __VLS_components.AMenuItem, typeof __VLS_components.aMenuItem, ]} */ ;
         // @ts-ignore
-        const __VLS_98 = __VLS_asFunctionalComponent(__VLS_97, new __VLS_97({
+        const __VLS_110 = __VLS_asFunctionalComponent(__VLS_109, new __VLS_109({
             ...{ 'onClick': {} },
             key: "logout",
         }));
-        const __VLS_99 = __VLS_98({
+        const __VLS_111 = __VLS_110({
             ...{ 'onClick': {} },
             key: "logout",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_98));
-        let __VLS_101;
-        let __VLS_102;
-        let __VLS_103;
-        const __VLS_104 = {
+        }, ...__VLS_functionalComponentArgsRest(__VLS_110));
+        let __VLS_113;
+        let __VLS_114;
+        let __VLS_115;
+        const __VLS_116 = {
             onClick: (__VLS_ctx.handleLogout)
         };
-        __VLS_100.slots.default;
+        __VLS_112.slots.default;
+        var __VLS_112;
         var __VLS_100;
-        var __VLS_88;
     }
-    var __VLS_84;
+    var __VLS_96;
 }
-var __VLS_80;
-const __VLS_105 = {}.ALayoutContent;
+var __VLS_92;
+const __VLS_117 = {}.ALayoutContent;
 /** @type {[typeof __VLS_components.ALayoutContent, typeof __VLS_components.aLayoutContent, typeof __VLS_components.ALayoutContent, typeof __VLS_components.aLayoutContent, ]} */ ;
 // @ts-ignore
-const __VLS_106 = __VLS_asFunctionalComponent(__VLS_105, new __VLS_105({
+const __VLS_118 = __VLS_asFunctionalComponent(__VLS_117, new __VLS_117({
     ...{ class: "page-content admin-content" },
 }));
-const __VLS_107 = __VLS_106({
+const __VLS_119 = __VLS_118({
     ...{ class: "page-content admin-content" },
-}, ...__VLS_functionalComponentArgsRest(__VLS_106));
-__VLS_108.slots.default;
-const __VLS_109 = {}.RouterView;
+}, ...__VLS_functionalComponentArgsRest(__VLS_118));
+__VLS_120.slots.default;
+const __VLS_121 = {}.RouterView;
 /** @type {[typeof __VLS_components.RouterView, typeof __VLS_components.routerView, ]} */ ;
 // @ts-ignore
-const __VLS_110 = __VLS_asFunctionalComponent(__VLS_109, new __VLS_109({}));
-const __VLS_111 = __VLS_110({}, ...__VLS_functionalComponentArgsRest(__VLS_110));
-var __VLS_108;
-var __VLS_76;
+const __VLS_122 = __VLS_asFunctionalComponent(__VLS_121, new __VLS_121({}));
+const __VLS_123 = __VLS_122({}, ...__VLS_functionalComponentArgsRest(__VLS_122));
+var __VLS_120;
+var __VLS_88;
 var __VLS_3;
 /** @type {__VLS_StyleScopedClasses['page-shell']} */ ;
 /** @type {__VLS_StyleScopedClasses['brand']} */ ;
@@ -350,6 +380,7 @@ var __VLS_dollars;
 const __VLS_self = (await import('vue')).defineComponent({
     setup() {
         return {
+            BarChartOutlined: BarChartOutlined,
             BookOutlined: BookOutlined,
             HistoryOutlined: HistoryOutlined,
             KeyOutlined: KeyOutlined,
