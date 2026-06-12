@@ -1,9 +1,18 @@
 import axios from 'axios'
+import { getEmbedAccessToken } from '../utils/embedAuth'
 
 export const http = axios.create({
   baseURL: '/api/v1',
   timeout: 30000,
   withCredentials: true,
+})
+
+http.interceptors.request.use((config) => {
+  const token = getEmbedAccessToken()
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
 })
 
 // 401 响应拦截：通知页面逻辑清理内存登录态并跳转。

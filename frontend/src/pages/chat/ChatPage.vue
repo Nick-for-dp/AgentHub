@@ -2,7 +2,7 @@
   <main class="chat-page">
     <!-- 历史会话侧边栏 -->
     <aside
-      v-if="auth.isLoggedIn"
+      v-if="showConversationChrome"
       :class="['conversation-sidebar', {
         'sidebar-open': sidebarVisible,
         'sidebar-collapsed': !sidebarVisible,
@@ -64,17 +64,17 @@
 
     <!-- 移动端遮罩 -->
     <div
-      v-if="isMobile && sidebarVisible"
+      v-if="showConversationChrome && isMobile && sidebarVisible"
       class="sidebar-overlay"
       @click="sidebarVisible = false"
     />
 
-    <section :class="['chat-panel', { 'sidebar-hidden-panel': !auth.isLoggedIn || !sidebarVisible }]">
+    <section :class="['chat-panel', { 'sidebar-hidden-panel': !showConversationChrome || !sidebarVisible }]">
       <!-- 顶栏 -->
       <header class="chat-header">
         <div class="header-left">
           <button
-            v-if="auth.isLoggedIn"
+            v-if="showConversationChrome"
             type="button"
             class="sidebar-toggle-btn"
             :title="sidebarVisible ? '收起历史会话' : '展开历史会话'"
@@ -89,7 +89,7 @@
         <div class="header-right">
           <a-tooltip title="新对话">
             <a-button
-            v-if="auth.isLoggedIn"
+            v-if="showConversationChrome"
             shape="circle"
             :disabled="loading || restoringConversation"
             class="header-icon-button"
@@ -101,7 +101,7 @@
               </template>
             </a-button>
           </a-tooltip>
-          <template v-if="auth.isLoggedIn && auth.currentUser">
+          <template v-if="showUserChrome && auth.currentUser">
             <a-dropdown trigger="click" placement="bottomRight">
               <button type="button" class="user-avatar-button" :title="auth.currentUser.name">
                 <span class="user-avatar">{{ getUserInitial(auth.currentUser.name) }}</span>
@@ -126,7 +126,10 @@
       <div ref="msgContainer" class="messages">
         <!-- 未登录时的引导提示 -->
         <div v-if="!canChat" class="hint-banner">
-          <a-button type="primary" @click="$router.push('/login')">请先登录</a-button>
+          <template v-if="isEmbedMode">
+            请先登录官网
+          </template>
+          <a-button v-else type="primary" @click="$router.push('/login')">请先登录</a-button>
         </div>
 
         <!-- 无消息时的欢迎 -->
@@ -310,6 +313,13 @@ import type { Conversation, ConversationMessage } from '../../api/conversations'
 import { useAuthStore } from '../../stores/auth'
 import { useCloudSpeechRecognition } from '../../composables/useCloudSpeechRecognition'
 import { useCloudSpeechSynthesis } from '../../composables/useCloudSpeechSynthesis'
+import { refreshEmbedToken } from '../../api/embed'
+import {
+  clearEmbedAccessToken,
+  getEmbedAccessToken,
+  getJwtExpiresAt,
+  setEmbedAccessToken,
+} from '../../utils/embedAuth'
 
 // 配置 marked
 marked.setOptions({ breaks: true, gfm: true })
@@ -500,7 +510,17 @@ function mapConversationMessage(item: ConversationMessage): Message | null {
 
 const router = useRouter()
 const auth = useAuthStore()
-const canChat = computed(() => auth.isLoggedIn)
+const isEmbedMode = computed(() => router.currentRoute.value.meta.embed === true)
+const embedToken = ref('')
+const embedAuthExpired = ref(false)
+const canChat = computed(() => (
+  isEmbedMode.value
+    ? !!embedToken.value && !embedAuthExpired.value
+    : auth.isLoggedIn
+))
+const hasConversationAccess = computed(() => canChat.value)
+const showConversationChrome = computed(() => hasConversationAccess.value)
+const showUserChrome = computed(() => auth.isLoggedIn && !isEmbedMode.value)
 const agentCode = ref('qa')
 const question = ref('')
 const loading = ref(false)
@@ -541,6 +561,7 @@ const queuedSteps: QueuedStep[] = []
 const stepTimers = new Set<ReturnType<typeof setTimeout>>()
 let isDrainingStepQueue = false
 let scrollTimer: ReturnType<typeof setTimeout> | null = null
+let embedRefreshTimer: ReturnType<typeof setTimeout> | null = null
 
 function syncConversationUrl(id: string | null): void {
   const query = { ...router.currentRoute.value.query }
@@ -574,7 +595,7 @@ function mergeConversationList(items: Conversation[], append: boolean): void {
 }
 
 async function loadConversationList(page = 1, append = false): Promise<void> {
-  if (!auth.isLoggedIn) return
+  if (!hasConversationAccess.value) return
   loadingConversations.value = true
   try {
     const result = await listConversations(agentCode.value, page, conversationPageSize)
@@ -654,7 +675,7 @@ async function switchConversation(id: string): Promise<void> {
 }
 
 async function restoreCurrentConversation(): Promise<void> {
-  if (!auth.isLoggedIn) return
+  if (!hasConversationAccess.value) return
   restoringConversation.value = true
   try {
     const routeConversationId = router.currentRoute.value.query.conversation_id
@@ -685,7 +706,7 @@ async function restoreCurrentConversation(): Promise<void> {
 }
 
 async function handleNewConversation(): Promise<void> {
-  if (loading.value) return
+  if (loading.value || !hasConversationAccess.value) return
   errorMsg.value = ''
   const conversation = await createConversation(agentCode.value)
   conversationId.value = conversation.id
@@ -952,15 +973,26 @@ function onWindowResize(): void {
 }
 
 onMounted(() => {
+  initAgentCodeFromRoute()
   window.addEventListener('resize', onWindowResize)
-  void restoreCurrentConversation()
-  if (auth.isLoggedIn) {
-    void refreshConversationList()
+  if (isEmbedMode.value) {
+    window.addEventListener('message', handleEmbedMessage)
+    postEmbedMessage('AGENTHUB_TOKEN_REQUIRED')
+  } else {
+    void restoreCurrentConversation()
+    if (auth.isLoggedIn) {
+      void refreshConversationList()
+    }
   }
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', onWindowResize)
+  window.removeEventListener('message', handleEmbedMessage)
+  if (embedRefreshTimer) {
+    clearTimeout(embedRefreshTimer)
+    embedRefreshTimer = null
+  }
   if (scrollTimer) {
     clearTimeout(scrollTimer)
     scrollTimer = null
@@ -970,6 +1002,9 @@ onUnmounted(() => {
     clearTimeout(timer)
   }
   stepTimers.clear()
+  if (isEmbedMode.value) {
+    clearEmbedAccessToken()
+  }
   stopTypewriter()
   synth.stop()
 })
@@ -1006,6 +1041,85 @@ function scheduleScrollLatest(behavior: ScrollBehavior = 'auto'): void {
   }, 80)
 }
 
+function initAgentCodeFromRoute(): void {
+  const queryAgent = router.currentRoute.value.query.agent
+  if (typeof queryAgent === 'string' && queryAgent.trim()) {
+    agentCode.value = queryAgent.trim()
+  }
+}
+
+function postEmbedMessage(type: string, payload: Record<string, unknown> = {}): void {
+  if (!isEmbedMode.value || window.parent === window) return
+  window.parent.postMessage({ type, ...payload }, '*')
+}
+
+function applyEmbedToken(token: string): void {
+  embedToken.value = token
+  embedAuthExpired.value = false
+  setEmbedAccessToken(token)
+  scheduleEmbedRefresh(token)
+}
+
+async function activateEmbedSession(token: string): Promise<void> {
+  const shouldRestoreSession = !hasConversationAccess.value
+  applyEmbedToken(token)
+  if (shouldRestoreSession) {
+    await restoreCurrentConversation()
+    await refreshConversationList()
+  }
+}
+
+function scheduleEmbedRefresh(token: string): void {
+  if (embedRefreshTimer) {
+    clearTimeout(embedRefreshTimer)
+    embedRefreshTimer = null
+  }
+  const expiresAt = getJwtExpiresAt(token)
+  if (!expiresAt) return
+  const refreshInMs = Math.max(1000, expiresAt - Date.now() - 60_000)
+  embedRefreshTimer = setTimeout(() => {
+    void refreshEmbedAccessToken()
+  }, refreshInMs)
+}
+
+async function refreshEmbedAccessToken(): Promise<boolean> {
+  if (!isEmbedMode.value || !embedToken.value) return false
+  try {
+    const resp = await refreshEmbedToken(embedToken.value)
+    applyEmbedToken(resp.access_token)
+    postEmbedMessage('AGENTHUB_TOKEN_REFRESHED', {
+      expires_in: resp.expires_in,
+      expires_at: resp.expires_at,
+    })
+    return true
+  } catch {
+    clearEmbedAccessToken()
+    embedToken.value = ''
+    embedAuthExpired.value = true
+    postEmbedMessage('AGENTHUB_AUTH_EXPIRED')
+    return false
+  }
+}
+
+function handleEmbedMessage(event: MessageEvent): void {
+  if (!isEmbedMode.value) return
+  const allowedOrigins = (import.meta.env.VITE_EMBED_ALLOWED_PARENT_ORIGINS || '')
+    .split(',')
+    .map((item: string) => item.trim())
+    .filter(Boolean)
+  if (allowedOrigins.length > 0 && !allowedOrigins.includes(event.origin)) {
+    return
+  }
+  if (event.data?.type === 'AGENTHUB_ACCESS_TOKEN' && typeof event.data.token === 'string') {
+    void activateEmbedSession(event.data.token)
+  }
+  if (event.data?.type === 'AGENTHUB_AUTH_EXPIRED') {
+    clearEmbedAccessToken()
+    embedToken.value = ''
+    embedAuthExpired.value = true
+  }
+}
+
 // ── 发送消息 ───────────────────────────────
 async function send() {
   const current = (question.value || speech.transcript.value).trim()
@@ -1016,11 +1130,22 @@ async function send() {
   errorMsg.value = ''
   thoughtOpen.value = true
 
-  const sessionReady = await auth.ensureFreshSessionForChat()
-  if (!sessionReady) {
-    errorMsg.value = '登录已失效，请重新登录'
-    router.push('/login')
-    return
+  if (isEmbedMode.value) {
+    const expiresAt = getJwtExpiresAt(embedToken.value)
+    if (expiresAt && Date.now() >= expiresAt - 30_000) {
+      const refreshed = await refreshEmbedAccessToken()
+      if (!refreshed) {
+        errorMsg.value = '官网登录态已失效，请重新登录官网'
+        return
+      }
+    }
+  } else {
+    const sessionReady = await auth.ensureFreshSessionForChat()
+    if (!sessionReady) {
+      errorMsg.value = '登录已失效，请重新登录'
+      router.push('/login')
+      return
+    }
   }
 
   const userMsg: Message = {
@@ -1091,10 +1216,19 @@ async function send() {
     assistantMsg.displayContent = assistantMsg.content
     assistantMsg.displayThought = assistantMsg.thought
     if (e.status === 401) {
-      // token 过期或无效，清理登录态并跳转
-      auth.clearSession()
-      errorMsg.value = '登录已失效，请重新登录'
-      router.push('/login')
+      if (isEmbedMode.value) {
+        const refreshed = await refreshEmbedAccessToken()
+        if (refreshed) {
+          errorMsg.value = '登录态已刷新，请重新发送'
+        } else {
+          errorMsg.value = '官网登录态已失效，请重新登录官网'
+        }
+      } else {
+        // token 过期或无效，清理登录态并跳转
+        auth.clearSession()
+        errorMsg.value = '登录已失效，请重新登录'
+        router.push('/login')
+      }
     } else if (e.status === 403) {
       errorMsg.value = `权限不足（403）：${e.message}`
     } else if (e.status === 503) {
@@ -1105,7 +1239,7 @@ async function send() {
   } finally {
     assistantMsg.isStreaming = false
     loading.value = false
-    if (auth.isLoggedIn) {
+    if (hasConversationAccess.value) {
       await refreshConversationList()
       const currentConversation = conversationList.value.find(item => item.id === conversationId.value)
       if (currentConversation) {

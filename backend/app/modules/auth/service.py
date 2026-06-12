@@ -1,6 +1,8 @@
 import hashlib
 from datetime import datetime, timedelta, timezone
 
+import jwt
+import httpx
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -8,13 +10,18 @@ from app.core.enums import (
     APIKeyOwnerType,
     APIKeyStatus,
     CallerType,
+    OrgUnitType,
     PolicyEffect,
     ResourceStatus,
     ResourceType,
     SubjectType,
+    UserType,
 )
 from app.core.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
 from app.core.security import (
+    create_embed_access_token,
+    decode_embed_access_token,
+    decode_embed_server_token,
     decode_access_token,
     generate_api_key_for_phone,
     generate_session_id,
@@ -23,11 +30,19 @@ from app.core.security import (
     normalize_phone,
     verify_password,
 )
-from app.modules.auth.models import APIKey, AuthSession, PermissionPolicy
+from app.modules.agent.repository import AgentRepository
+from app.modules.auth.models import APIKey, AuthSession, EmbedSession, PermissionPolicy
 from app.modules.auth.repository import AuthRepository
 from app.modules.auth.schemas import (
     APIKeyCreateByPhone,
     AuthenticatedSubject,
+    EmbedRefreshRequest,
+    EmbedRevokeRequest,
+    EmbedRevokeResponse,
+    EmbedSessionStatusResponse,
+    EmbedSessionUser,
+    EmbedTokenRequest,
+    EmbedTokenResponse,
     LoginRequest,
     PermissionPolicyCreate,
     SessionResponse,
@@ -43,6 +58,7 @@ class AuthService:
         self.db = db
         self.repository = AuthRepository(db)
         self.org_repository = OrgRepository(db)
+        self.agent_repository = AgentRepository(db)
 
     def issue_external_customer_api_key_by_phone(self, payload: APIKeyCreateByPhone) -> tuple[str, APIKey]:
         phone_normalized = normalize_phone(payload.phone)
@@ -173,9 +189,279 @@ class AuthService:
         """认证 Authorization Bearer 凭证。
 
         浏览器用户登录态已迁移到服务端 Session Cookie；Bearer 仅保留给外部系统
-        和过渡期管理 API Key 使用。
+        和过渡期管理 API Key 使用。官网嵌入场景新增 embed access token，
+        验证通过后同样转换为 AuthenticatedSubject。
         """
+        try:
+            return self.authenticate_embed_access_token(raw_token)
+        except jwt.ExpiredSignatureError:
+            raise UnauthorizedError("embed token expired")
+        except jwt.InvalidTokenError:
+            pass
         return self.authenticate_api_key(raw_token)
+
+    # ── 官网嵌入认证 ──────────────────────────────────────────
+
+    def verify_embed_server_token(self, raw_token: str) -> dict:
+        try:
+            return decode_embed_server_token(raw_token)
+        except jwt.ExpiredSignatureError:
+            raise UnauthorizedError("embed server token expired")
+        except jwt.InvalidTokenError:
+            raise UnauthorizedError("invalid embed server token")
+
+    def issue_embed_token(self, payload: EmbedTokenRequest) -> EmbedTokenResponse:
+        settings = get_settings()
+        agent_code = payload.agent_code or settings.embed_default_agent_code
+        agent = self.agent_repository.get_agent_by_code(agent_code)
+        if agent is None:
+            raise NotFoundError("agent not found")
+
+        phone_normalized = normalize_phone(payload.phone)
+        user = self.org_repository.get_active_external_user_by_phone(phone_normalized)
+        if user is None:
+            user = self._create_embed_user(phone_normalized, payload.external_user_id)
+
+        self._ensure_embed_agent_permission(user, agent.id)
+
+        now = datetime.now(timezone.utc)
+        existing = self.repository.get_active_embed_session_by_external_user(
+            external_user_id=payload.external_user_id,
+            agent_code=agent_code,
+        )
+        raw_session_id = generate_session_id()
+        expires_at = now + timedelta(minutes=settings.embed_access_token_expire_minutes)
+        refresh_expires_at = now + timedelta(hours=settings.embed_session_expire_hours)
+
+        if existing is not None:
+            existing.status = "REVOKED"
+            existing.revoked_at = now
+            existing.revoke_reason = "superseded"
+            self.repository.save_embed_session(existing)
+
+        session = EmbedSession(
+            session_hash=hash_session_id(raw_session_id),
+            external_user_id=payload.external_user_id,
+            external_session_id=None,
+            phone_normalized=phone_normalized,
+            user_id=user.id,
+            org_unit_id=user.org_unit_id,
+            agent_code=agent_code,
+            status=ResourceStatus.ACTIVE,
+            access_expires_at=expires_at,
+            refresh_expires_at=refresh_expires_at,
+            last_seen_at=now,
+        )
+        self.repository.add_embed_session(session)
+        token = self._create_embed_token_for_session(session, raw_session_id, expires_at)
+        self.db.commit()
+        self.db.refresh(session)
+        return EmbedTokenResponse(
+            access_token=token,
+            expires_in=max(0, int((expires_at - now).total_seconds())),
+            expires_at=expires_at,
+        )
+
+    def refresh_embed_token(self, payload: EmbedRefreshRequest, authorization_token: str | None) -> EmbedTokenResponse:
+        raw_token = payload.access_token or authorization_token
+        if not raw_token:
+            raise UnauthorizedError("missing embed token")
+        try:
+            claims = decode_embed_access_token(raw_token, verify_exp=False)
+        except jwt.InvalidTokenError:
+            raise UnauthorizedError("invalid embed token")
+
+        raw_session_id = claims.get("sid")
+        if not raw_session_id:
+            raise UnauthorizedError("invalid embed token")
+        session = self._get_valid_embed_session(raw_session_id, require_access=False)
+        if not self._is_official_session_active(session):
+            self._revoke_embed_session(session, "official_session_inactive")
+            self.db.commit()
+            raise UnauthorizedError("官网登录态已失效")
+
+        settings = get_settings()
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(minutes=settings.embed_access_token_expire_minutes)
+        session.access_expires_at = expires_at
+        session.last_seen_at = now
+        self.repository.save_embed_session(session)
+        token = self._create_embed_token_for_session(session, raw_session_id, expires_at)
+        self.db.commit()
+        return EmbedTokenResponse(
+            access_token=token,
+            expires_in=max(0, int((expires_at - now).total_seconds())),
+            expires_at=expires_at,
+        )
+
+    def get_embed_session_status(self, raw_token: str | None) -> EmbedSessionStatusResponse:
+        if not raw_token:
+            return EmbedSessionStatusResponse(authenticated=False)
+        try:
+            claims = decode_embed_access_token(raw_token, verify_exp=False)
+        except jwt.InvalidTokenError:
+            return EmbedSessionStatusResponse(authenticated=False)
+        raw_session_id = claims.get("sid")
+        if not raw_session_id:
+            return EmbedSessionStatusResponse(authenticated=False)
+        session = self.repository.get_embed_session_by_hash(hash_session_id(raw_session_id))
+        if session is None or session.status != ResourceStatus.ACTIVE or session.revoked_at is not None:
+            return EmbedSessionStatusResponse(authenticated=False)
+        now = datetime.now(timezone.utc)
+        refreshable = self._as_utc(session.refresh_expires_at) > now
+        user = self.org_repository.get_user(session.user_id)
+        return EmbedSessionStatusResponse(
+            authenticated=self._as_utc(session.access_expires_at) > now,
+            user=EmbedSessionUser(
+                id=session.user_id,
+                external_user_id=session.external_user_id,
+                name=user.name if user else session.external_user_id,
+                phone=session.phone_normalized,
+            ),
+            agent_code=session.agent_code,
+            access_expires_in=max(0, int((self._as_utc(session.access_expires_at) - now).total_seconds())),
+            refreshable=refreshable,
+        )
+
+    def revoke_embed_sessions(self, payload: EmbedRevokeRequest) -> EmbedRevokeResponse:
+        if not payload.external_user_id and not payload.external_session_id:
+            raise UnauthorizedError("external_user_id or external_session_id is required")
+        sessions = self.repository.list_active_embed_sessions_for_revoke(
+            external_user_id=payload.external_user_id,
+            external_session_id=payload.external_session_id,
+        )
+        for session in sessions:
+            self._revoke_embed_session(session, payload.reason or "official_logout")
+        self.db.commit()
+        return EmbedRevokeResponse(revoked=bool(sessions))
+
+    def authenticate_embed_access_token(self, raw_token: str) -> AuthenticatedSubject:
+        claims = decode_embed_access_token(raw_token, verify_exp=True)
+        raw_session_id = claims.get("sid")
+        if not raw_session_id:
+            raise UnauthorizedError("invalid embed token")
+        session = self._get_valid_embed_session(raw_session_id, require_access=True)
+        user = self.org_repository.get_user(session.user_id)
+        if user is None or user.status != ResourceStatus.ACTIVE:
+            raise UnauthorizedError("embed user is not active")
+        return AuthenticatedSubject(
+            caller_type=CallerType.USER,
+            user_id=session.user_id,
+            org_unit_id=session.org_unit_id or user.org_unit_id,
+        )
+
+    def _create_embed_user(self, phone_normalized: str, external_user_id: str) -> UserAccount:
+        settings = get_settings()
+        org = self.org_repository.get_org_unit_by_name_type(
+            name=settings.embed_default_org_name,
+            org_type=OrgUnitType.EXTERNAL_CUSTOMER,
+        )
+        if org is None:
+            org = OrgUnit(
+                name=settings.embed_default_org_name,
+                type=OrgUnitType.EXTERNAL_CUSTOMER,
+                status=ResourceStatus.ACTIVE,
+            )
+            self.org_repository.add_org_unit(org)
+            self.db.flush()
+        user = UserAccount(
+            org_unit_id=org.id,
+            name=f"官网用户 {external_user_id}",
+            user_type=UserType.EXTERNAL_CUSTOMER,
+            phone=phone_normalized,
+            phone_normalized=phone_normalized,
+            status=ResourceStatus.ACTIVE,
+            remark=f"created from official website embed user {external_user_id}",
+        )
+        self.org_repository.add_user(user)
+        self.db.flush()
+        return user
+
+    def _ensure_embed_agent_permission(self, user: UserAccount, agent_id: str) -> None:
+        subject = AuthenticatedSubject(
+            caller_type=CallerType.USER,
+            user_id=user.id,
+            org_unit_id=user.org_unit_id,
+        )
+        try:
+            self.assert_allowed(subject, ResourceType.AGENT, agent_id, "invoke")
+            return
+        except ForbiddenError:
+            pass
+        self.repository.add_permission_policy(
+            PermissionPolicy(
+                subject_type=SubjectType.USER,
+                subject_id=user.id,
+                resource_type=ResourceType.AGENT,
+                resource_id=agent_id,
+                actions=["invoke"],
+                effect=PolicyEffect.ALLOW,
+                status=ResourceStatus.ACTIVE,
+            )
+        )
+        self.db.flush()
+
+    def _create_embed_token_for_session(
+        self,
+        session: EmbedSession,
+        raw_session_id: str,
+        expires_at: datetime,
+    ) -> str:
+        return create_embed_access_token(
+            session_id=raw_session_id,
+            sub=session.user_id,
+            external_user_id=session.external_user_id,
+            phone=session.phone_normalized,
+            agent_code=session.agent_code,
+            org_unit_id=session.org_unit_id,
+            expires_delta=expires_at - datetime.now(timezone.utc),
+        )
+
+    def _get_valid_embed_session(self, raw_session_id: str, *, require_access: bool) -> EmbedSession:
+        session = self.repository.get_embed_session_by_hash(hash_session_id(raw_session_id))
+        if session is None:
+            raise UnauthorizedError("embed session not found")
+        if session.status != ResourceStatus.ACTIVE or session.revoked_at is not None:
+            raise UnauthorizedError("embed session revoked")
+        now = datetime.now(timezone.utc)
+        if self._as_utc(session.refresh_expires_at) <= now:
+            raise UnauthorizedError("embed session expired")
+        if require_access and self._as_utc(session.access_expires_at) <= now:
+            raise UnauthorizedError("embed token expired")
+        session.last_seen_at = now
+        self.repository.save_embed_session(session)
+        self.db.commit()
+        return session
+
+    def _is_official_session_active(self, session: EmbedSession) -> bool:
+        settings = get_settings()
+        if not settings.embed_official_introspect_url:
+            return session.status == ResourceStatus.ACTIVE
+        headers: dict[str, str] = {}
+        if settings.embed_official_introspect_secret:
+            headers["Authorization"] = f"Bearer {settings.embed_official_introspect_secret}"
+        try:
+            response = httpx.post(
+                settings.embed_official_introspect_url,
+                json={
+                    "external_user_id": session.external_user_id,
+                    "phone": session.phone_normalized,
+                    "agent_code": session.agent_code,
+                },
+                headers=headers,
+                timeout=5.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+        except Exception:
+            return False
+        return bool(data.get("active"))
+
+    def _revoke_embed_session(self, session: EmbedSession, reason: str) -> None:
+        session.status = "REVOKED"
+        session.revoked_at = datetime.now(timezone.utc)
+        session.revoke_reason = reason
+        self.repository.save_embed_session(session)
 
     # ── 手机号密码登录 ──────────────────────────────────────────
 

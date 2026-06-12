@@ -29,8 +29,9 @@ def get_current_subject(
     """从 Cookie Session 或 Authorization Header 解析调用主体。
 
     认证步骤：
-    1. 浏览器请求优先读取 HttpOnly session cookie
-    2. 外部系统/过渡管理入口读取 Authorization: Bearer <api_key>
+    1. 如果请求显式携带 Authorization Bearer，优先解析 Bearer 凭证
+       （API Key 或官网嵌入 embed access token）
+    2. 未携带 Bearer 时，浏览器请求读取 HttpOnly session cookie
     3. 返回统一 AuthenticatedSubject（含 caller_type、user_id、org_unit_id、scopes）
 
     Raises:
@@ -39,25 +40,19 @@ def get_current_subject(
     service = AuthService(db)
     settings = get_settings()
     raw_session_id = request.cookies.get(settings.auth_cookie_name)
-    session_error: UnauthorizedError | None = None
-    if raw_session_id:
-        try:
-            subject = service.authenticate_session_cookie(raw_session_id)
-            max_age_seconds = settings.session_idle_expire_minutes * 60
-            set_auth_cookie(response, raw_session_id, max_age_seconds)
-            return subject
-        except UnauthorizedError as exc:
-            session_error = exc
+    if authorization:
+        # "Bearer <token>" → scheme="bearer", token="<token>"
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            raise UnauthorizedError("authorization must be bearer token")
+        return service.authenticate_bearer_token(token)
 
-    if not authorization:
-        if session_error:
-            raise session_error
+    if not raw_session_id:
         raise UnauthorizedError("missing authentication credentials")
-    # "Bearer <token>" → scheme="bearer", token="<token>"
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise UnauthorizedError("authorization must be bearer token")
-    return service.authenticate_bearer_token(token)
+    subject = service.authenticate_session_cookie(raw_session_id)
+    max_age_seconds = settings.session_idle_expire_minutes * 60
+    set_auth_cookie(response, raw_session_id, max_age_seconds)
+    return subject
 
 
 def require_admin_permission(

@@ -17,6 +17,11 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/embed/chat',
+      component: () => import('../pages/chat/ChatPage.vue'),
+      meta: { embed: true },
+    },
+    {
       path: '/admin',
       component: () => import('../layouts/AdminLayout.vue'),
       meta: { requiresAuth: true },

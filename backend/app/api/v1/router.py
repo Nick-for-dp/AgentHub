@@ -9,6 +9,7 @@ from app.api.v1.endpoints import (
     chat,
     conversations,
     documents,
+    embed,
     evaluations,
     invocation_records,
     knowledge_bases,
@@ -23,6 +24,9 @@ api_router = APIRouter()
 
 # auth 是公开接口，不需要 admin 权限
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
+
+# embed 是官网嵌入问答的认证接口，由 endpoint 内部区分官网服务端 JWT 与 embed access token。
+api_router.include_router(embed.router, prefix="/embed", tags=["embed"])
 
 # chat 是公开接口，不需要 admin 权限，但需要认证（由 endpoint 内部处理）
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])

@@ -1,5 +1,6 @@
 import { http } from './http'
 import type { APIResponse } from './types'
+import { getEmbedAccessToken } from '../utils/embedAuth'
 
 export interface AudioTranscriptionResult {
   text: string
@@ -27,10 +28,14 @@ export async function requestSpeechAudio(
   voice?: string,
   signal?: AbortSignal,
 ): Promise<Response> {
+  const embedToken = getEmbedAccessToken()
   const response = await fetch('/api/v1/audio/speech', {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(embedToken ? { Authorization: `Bearer ${embedToken}` } : {}),
+    },
     body: JSON.stringify({ text, voice }),
     signal,
   })

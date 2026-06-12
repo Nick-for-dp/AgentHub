@@ -4,7 +4,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.enums import ResourceStatus
-from app.modules.auth.models import APIKey, AuthSession, PermissionPolicy
+from app.modules.auth.models import APIKey, AuthSession, EmbedSession, PermissionPolicy
 
 
 class AuthRepository:
@@ -21,6 +21,11 @@ class AuthRepository:
         self.db.flush()
         return session
 
+    def add_embed_session(self, session: EmbedSession) -> EmbedSession:
+        self.db.add(session)
+        self.db.flush()
+        return session
+
     def get_auth_session_by_hash(self, session_hash: str) -> AuthSession | None:
         stmt = select(AuthSession).where(AuthSession.session_hash == session_hash)
         return self.db.scalars(stmt).one_or_none()
@@ -29,6 +34,48 @@ class AuthRepository:
         self.db.add(session)
         self.db.flush()
         return session
+
+    def save_embed_session(self, session: EmbedSession) -> EmbedSession:
+        self.db.add(session)
+        self.db.flush()
+        return session
+
+    def get_embed_session_by_hash(self, session_hash: str) -> EmbedSession | None:
+        stmt = select(EmbedSession).where(EmbedSession.session_hash == session_hash)
+        return self.db.scalars(stmt).one_or_none()
+
+    def get_active_embed_session_by_external_user(
+        self,
+        *,
+        external_user_id: str,
+        agent_code: str,
+    ) -> EmbedSession | None:
+        stmt = (
+            select(EmbedSession)
+            .where(
+                EmbedSession.external_user_id == external_user_id,
+                EmbedSession.agent_code == agent_code,
+                EmbedSession.status == ResourceStatus.ACTIVE,
+            )
+            .order_by(EmbedSession.created_at.desc())
+            .limit(1)
+        )
+        return self.db.scalars(stmt).one_or_none()
+
+    def list_active_embed_sessions_for_revoke(
+        self,
+        *,
+        external_user_id: str | None,
+        external_session_id: str | None,
+    ) -> list[EmbedSession]:
+        stmt = select(EmbedSession).where(EmbedSession.status == ResourceStatus.ACTIVE)
+        if external_session_id:
+            stmt = stmt.where(EmbedSession.external_session_id == external_session_id)
+        elif external_user_id:
+            stmt = stmt.where(EmbedSession.external_user_id == external_user_id)
+        else:
+            return []
+        return list(self.db.scalars(stmt))
 
     def get_api_key_by_hash(self, key_hash: str) -> APIKey | None:
         stmt = select(APIKey).where(APIKey.key_hash == key_hash)

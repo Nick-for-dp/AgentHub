@@ -219,6 +219,73 @@ def decode_access_token(token: str) -> dict[str, Any]:
     return payload
 
 
+def decode_embed_server_token(token: str) -> dict[str, Any]:
+    """验证官网后端调用 AgentHub embed 接口时使用的服务端 JWT。
+
+    该 token 由官网后端使用双方约定的 `embed_server_jwt_secret` 签发，
+    仅用于调用 `/embed/token`、`/embed/revoke` 等服务端接口。
+    """
+    settings = get_settings()
+    payload = jwt.decode(
+        token,
+        settings.embed_server_jwt_secret,
+        algorithms=["HS256"],
+        options={"require": ["sub", "typ", "exp", "iat"]},
+    )
+    if payload.get("typ") != "embed_server":
+        raise jwt.InvalidTokenError("token type is not embed_server")
+    return payload
+
+
+def create_embed_access_token(
+    *,
+    session_id: str,
+    sub: str,
+    external_user_id: str,
+    phone: str,
+    agent_code: str,
+    org_unit_id: str | None,
+    expires_delta: timedelta | None = None,
+) -> str:
+    """签发官网嵌入场景使用的短期 access token。"""
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    if expires_delta is None:
+        expires_delta = timedelta(minutes=settings.embed_access_token_expire_minutes)
+    payload = {
+        "sub": sub,
+        "sid": session_id,
+        "external_user_id": external_user_id,
+        "phone": phone,
+        "agent_code": agent_code,
+        "org_unit_id": org_unit_id,
+        "typ": "embed_access",
+        "jti": uuid.uuid4().hex,
+        "iat": now,
+        "exp": now + expires_delta,
+        "iss": settings.embed_token_issuer,
+    }
+    return jwt.encode(payload, settings.embed_access_token_secret, algorithm="HS256")
+
+
+def decode_embed_access_token(token: str, *, verify_exp: bool = True) -> dict[str, Any]:
+    """解码并验证 AgentHub 签发的 embed access token。"""
+    settings = get_settings()
+    payload = jwt.decode(
+        token,
+        settings.embed_access_token_secret,
+        algorithms=["HS256"],
+        issuer=settings.embed_token_issuer,
+        options={
+            "require": ["sub", "sid", "external_user_id", "typ", "jti", "exp", "iat"],
+            "verify_exp": verify_exp,
+        },
+    )
+    if payload.get("typ") != "embed_access":
+        raise jwt.InvalidTokenError("token type is not embed_access")
+    return payload
+
+
 def sanitize_dict_for_log(data: Mapping[str, Any]) -> dict[str, Any]:
     """递归脱敏字典，将敏感字段的值替换为 '***'。
 

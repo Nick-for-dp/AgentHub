@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.enums import ResourceStatus, UserType
+from app.core.enums import OrgUnitType, ResourceStatus, UserType
 from app.modules.org.models import OrgUnit, UserAccount
 
 
@@ -16,6 +16,19 @@ class OrgRepository:
 
     def get_org_unit(self, org_unit_id: str) -> OrgUnit | None:
         return self.db.get(OrgUnit, org_unit_id)
+
+    def get_org_unit_by_name_type(
+        self,
+        *,
+        name: str,
+        org_type: str = OrgUnitType.EXTERNAL_CUSTOMER,
+    ) -> OrgUnit | None:
+        stmt = select(OrgUnit).where(
+            OrgUnit.name == name,
+            OrgUnit.type == org_type,
+            OrgUnit.status == ResourceStatus.ACTIVE,
+        )
+        return self.db.scalars(stmt).first()
 
     def list_org_units(self, limit: int = 100, offset: int = 0) -> list[OrgUnit]:
         stmt = select(OrgUnit).order_by(OrgUnit.created_at.desc()).limit(limit).offset(offset)

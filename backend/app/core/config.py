@@ -1,7 +1,22 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+DEV_EMBED_SERVER_JWT_SECRET = "dev-embed-server-secret-change-me"
+DEV_EMBED_ACCESS_TOKEN_SECRET = "dev-embed-access-secret-change-me"
+PRODUCTION_ENVIRONMENTS = frozenset({"prod", "production"})
+PRODUCTION_EMBED_SECRET_MIN_LENGTH = 32
+INSECURE_EMBED_SECRET_VALUES = frozenset(
+    {
+        DEV_EMBED_SERVER_JWT_SECRET,
+        DEV_EMBED_ACCESS_TOKEN_SECRET,
+        "change-me-to-official-server-jwt-secret",
+        "change-me-to-embed-access-token-secret",
+    }
+)
+INSECURE_EMBED_SECRET_MARKERS = ("change-me", "changeme", "dev-", "dev_", "example", "placeholder")
 
 
 class Settings(BaseSettings):
@@ -27,6 +42,18 @@ class Settings(BaseSettings):
     session_id_bytes: int = 32
     refresh_token_expire_days: int = 7
     conversation_inactive_hours: int = 24
+    # 官网嵌入配置
+    embed_enabled: bool = True
+    embed_server_jwt_secret: str = Field(default=DEV_EMBED_SERVER_JWT_SECRET, min_length=16)
+    embed_access_token_secret: str = Field(default=DEV_EMBED_ACCESS_TOKEN_SECRET, min_length=16)
+    embed_token_issuer: str = "agenthub-embed"
+    embed_access_token_expire_minutes: int = 15
+    embed_session_expire_hours: int = 12
+    embed_default_agent_code: str = "qa"
+    embed_default_org_name: str = "官网嵌入用户"
+    embed_official_introspect_url: str | None = None
+    embed_official_introspect_secret: str | None = None
+    embed_allowed_parent_origins: str | None = None
     # Dify 集成配置
     dify_base_url: str | None = None
     dify_api_key: str | None = None
@@ -51,7 +78,51 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    @property
+    def embed_allowed_parent_origin_list(self) -> list[str]:
+        if not self.embed_allowed_parent_origins:
+            return []
+        return [
+            origin.strip()
+            for origin in self.embed_allowed_parent_origins.split(",")
+            if origin.strip()
+        ]
+
+    @model_validator(mode="after")
+    def validate_production_embed_secrets(self) -> "Settings":
+        if self.environment.strip().lower() not in PRODUCTION_ENVIRONMENTS or not self.embed_enabled:
+            return self
+
+        _validate_production_embed_secret(
+            "EMBED_SERVER_JWT_SECRET",
+            self.embed_server_jwt_secret,
+        )
+        _validate_production_embed_secret(
+            "EMBED_ACCESS_TOKEN_SECRET",
+            self.embed_access_token_secret,
+        )
+        if self.embed_server_jwt_secret == self.embed_access_token_secret:
+            raise ValueError(
+                "EMBED_SERVER_JWT_SECRET and EMBED_ACCESS_TOKEN_SECRET must be different "
+                "in production"
+            )
+        return self
+
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def _validate_production_embed_secret(name: str, value: str) -> None:
+    normalized = value.strip()
+    if normalized in INSECURE_EMBED_SECRET_VALUES:
+        raise ValueError(f"{name} must be changed from the public development placeholder")
+    if len(normalized) < PRODUCTION_EMBED_SECRET_MIN_LENGTH:
+        raise ValueError(
+            f"{name} must be at least {PRODUCTION_EMBED_SECRET_MIN_LENGTH} characters "
+            "in production"
+        )
+    lowered = normalized.lower()
+    if any(marker in lowered for marker in INSECURE_EMBED_SECRET_MARKERS):
+        raise ValueError(f"{name} must not contain placeholder text in production")

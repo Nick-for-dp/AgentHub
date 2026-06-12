@@ -1,5 +1,5 @@
 from app.modules.agent.models import Agent, AgentKnowledgeBase
-from app.modules.auth.models import APIKey, AuthSession, PermissionPolicy
+from app.modules.auth.models import APIKey, AuthSession, EmbedSession, PermissionPolicy
 from app.modules.conversation.models import Conversation, ConversationMessage
 from app.modules.evaluation.models import EvaluationCase, EvaluationResult
 from app.modules.invocation.models import AgentInvocationRecord
@@ -19,6 +19,7 @@ __all__ = [
     "DocumentChunk",
     "EvaluationCase",
     "EvaluationResult",
+    "EmbedSession",
     "KnowledgeBase",
     "LeadCaptureEvent",
     "LeadContact",
