@@ -17,7 +17,7 @@ from app.core.enums import (
     InvocationStatus,
     ResourceType,
 )
-from app.core.exceptions import DifyIntegrationError
+from app.core.exceptions import DifyIntegrationError, ForbiddenError
 from app.db.session import get_db
 from app.integrations.dify.output import NormalizedDifyOutput, normalize_dify_final_output
 from app.modules.agent.runtime import AgentRuntimeService
@@ -58,7 +58,11 @@ async def chat(
     lead_service = LeadService(db)
 
     agent = agent_service.get_agent_by_code(agent_code)
-    auth_service.assert_allowed(subject, ResourceType.AGENT, agent.id, "invoke")
+    if subject.embed_session_id is not None:
+        if subject.embed_agent_code != agent_code:
+            raise ForbiddenError("embed session cannot access this agent")
+    else:
+        auth_service.assert_allowed(subject, ResourceType.AGENT, agent.id, "invoke")
     platform_conversation: Conversation | None = None
     assistant_message: ConversationMessage | None = None
     provider_conversation_id = payload.conversation_id

@@ -4,16 +4,13 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-DEV_EMBED_SERVER_JWT_SECRET = "dev-embed-server-secret-change-me"
-DEV_EMBED_ACCESS_TOKEN_SECRET = "dev-embed-access-secret-change-me"
+DEV_EMBED_EXTERNAL_TOKEN_SECRET = "dev-industrial-embed-token-secret-change-me"
 PRODUCTION_ENVIRONMENTS = frozenset({"prod", "production"})
 PRODUCTION_EMBED_SECRET_MIN_LENGTH = 32
 INSECURE_EMBED_SECRET_VALUES = frozenset(
     {
-        DEV_EMBED_SERVER_JWT_SECRET,
-        DEV_EMBED_ACCESS_TOKEN_SECRET,
-        "change-me-to-official-server-jwt-secret",
-        "change-me-to-embed-access-token-secret",
+        DEV_EMBED_EXTERNAL_TOKEN_SECRET,
+        "change-me-to-industrial-embed-token-secret",
     }
 )
 INSECURE_EMBED_SECRET_MARKERS = ("change-me", "changeme", "dev-", "dev_", "example", "placeholder")
@@ -44,15 +41,16 @@ class Settings(BaseSettings):
     conversation_inactive_hours: int = 24
     # 官网嵌入配置
     embed_enabled: bool = True
-    embed_server_jwt_secret: str = Field(default=DEV_EMBED_SERVER_JWT_SECRET, min_length=16)
-    embed_access_token_secret: str = Field(default=DEV_EMBED_ACCESS_TOKEN_SECRET, min_length=16)
-    embed_token_issuer: str = "agenthub-embed"
-    embed_access_token_expire_minutes: int = 15
-    embed_session_expire_hours: int = 12
+    embed_external_token_secret: str = Field(default=DEV_EMBED_EXTERNAL_TOKEN_SECRET, min_length=16)
+    embed_external_token_issuer: str = "industrial-internet-mock"
+    embed_external_token_audience: str = "agenthub"
+    embed_session_expire_minutes: int = 10
+    embed_session_cookie_name: str = "agenthub_embed_session"
+    embed_cookie_secure: bool = False
+    embed_cookie_samesite: str = "lax"
+    embed_cookie_domain: str | None = None
     embed_default_agent_code: str = "qa"
     embed_default_org_name: str = "官网嵌入用户"
-    embed_official_introspect_url: str | None = None
-    embed_official_introspect_secret: str | None = None
     embed_allowed_parent_origins: str | None = None
     # Dify 集成配置
     dify_base_url: str | None = None
@@ -94,18 +92,9 @@ class Settings(BaseSettings):
             return self
 
         _validate_production_embed_secret(
-            "EMBED_SERVER_JWT_SECRET",
-            self.embed_server_jwt_secret,
+            "EMBED_EXTERNAL_TOKEN_SECRET",
+            self.embed_external_token_secret,
         )
-        _validate_production_embed_secret(
-            "EMBED_ACCESS_TOKEN_SECRET",
-            self.embed_access_token_secret,
-        )
-        if self.embed_server_jwt_secret == self.embed_access_token_secret:
-            raise ValueError(
-                "EMBED_SERVER_JWT_SECRET and EMBED_ACCESS_TOKEN_SECRET must be different "
-                "in production"
-            )
         return self
 
 

@@ -1,76 +1,49 @@
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import UnauthorizedError
+from app.core.config import get_settings
+from app.core.security import clear_embed_cookie, set_embed_cookie
 from app.db.session import get_db
 from app.modules.auth.schemas import (
-    EmbedRefreshRequest,
-    EmbedRevokeRequest,
-    EmbedRevokeResponse,
+    EmbedExchangeRequest,
+    EmbedExchangeResponse,
     EmbedSessionStatusResponse,
-    EmbedTokenRequest,
-    EmbedTokenResponse,
 )
 from app.modules.auth.service import AuthService
 
 router = APIRouter()
 
 
-def _extract_bearer_token(authorization: str | None) -> str:
-    if not authorization:
-        raise UnauthorizedError("missing authentication credentials")
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise UnauthorizedError("authorization must be bearer token")
-    return token
-
-
-def _require_embed_server_token(
-    authorization: str | None,
-    db: Session,
-) -> None:
-    raw_token = _extract_bearer_token(authorization)
-    AuthService(db).verify_embed_server_token(raw_token)
-
-
-@router.post("/token", response_model=EmbedTokenResponse)
-def issue_embed_token(
-    payload: EmbedTokenRequest,
-    authorization: str | None = Header(default=None),
+@router.post("/exchange", response_model=EmbedExchangeResponse)
+def exchange_embed_token(
+    payload: EmbedExchangeRequest,
+    response: Response,
     db: Session = Depends(get_db),
-) -> EmbedTokenResponse:
-    """官网用户登录后，由官网后端调用，签发 AgentHub embed access token。"""
-    _require_embed_server_token(authorization, db)
-    return AuthService(db).issue_embed_token(payload)
-
-
-@router.post("/refresh", response_model=EmbedTokenResponse)
-def refresh_embed_token(
-    payload: EmbedRefreshRequest | None = None,
-    authorization: str | None = Header(default=None),
-    db: Session = Depends(get_db),
-) -> EmbedTokenResponse:
-    """embed access token 过期或即将过期时刷新。"""
-    header_token = _extract_bearer_token(authorization) if authorization else None
-    return AuthService(db).refresh_embed_token(payload or EmbedRefreshRequest(), header_token)
+) -> EmbedExchangeResponse:
+    """使用产业互联网短期用户态 JWT 建立 AgentHub iframe embed session。"""
+    raw_session_id, exchange_response = AuthService(db).exchange_embed_token(payload)
+    set_embed_cookie(response, raw_session_id, exchange_response.expires_in)
+    return exchange_response
 
 
 @router.get("/session", response_model=EmbedSessionStatusResponse)
 def get_embed_session(
-    authorization: str | None = Header(default=None),
+    request: Request,
     db: Session = Depends(get_db),
 ) -> EmbedSessionStatusResponse:
-    """查询 AgentHub 侧 embed session 状态。"""
-    header_token = _extract_bearer_token(authorization) if authorization else None
-    return AuthService(db).get_embed_session_status(header_token)
+    """查询当前 iframe embed session 状态，不返回产业互联网用户明细。"""
+    raw_session_id = request.cookies.get(get_settings().embed_session_cookie_name)
+    return AuthService(db).get_embed_session_status(raw_session_id)
 
 
-@router.post("/revoke", response_model=EmbedRevokeResponse)
-def revoke_embed_session(
-    payload: EmbedRevokeRequest,
-    authorization: str | None = Header(default=None),
+@router.post("/logout")
+def logout_embed_session(
+    request: Request,
+    response: Response,
     db: Session = Depends(get_db),
-) -> EmbedRevokeResponse:
-    """官网用户登出时，由官网后端通知 AgentHub 撤销 embed session。"""
-    _require_embed_server_token(authorization, db)
-    return AuthService(db).revoke_embed_sessions(payload)
+) -> dict[str, bool]:
+    """关闭 iframe 组件时撤销当前 AgentHub embed session 并清 Cookie。"""
+    raw_session_id = request.cookies.get(get_settings().embed_session_cookie_name)
+    revoked = AuthService(db).revoke_current_embed_session(raw_session_id)
+    clear_embed_cookie(response)
+    return {"revoked": revoked}

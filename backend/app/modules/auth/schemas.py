@@ -83,6 +83,8 @@ class AuthenticatedSubject(BaseModel):
     user_id: str | None = None
     org_unit_id: str | None = None
     api_key_id: str | None = None
+    embed_session_id: str | None = None
+    embed_agent_code: str | None = None
     scopes: list[str] = Field(default_factory=list)
 
 
@@ -124,32 +126,23 @@ class SessionStatusResponse(BaseModel):
 # ── 官网嵌入认证 ──────────────────────────────────────────────
 
 
-class EmbedTokenRequest(BaseModel):
-    external_user_id: str = Field(min_length=1, max_length=100)
-    phone: str = Field(min_length=1, max_length=64)
+class EmbedExchangeRequest(BaseModel):
+    token: str = Field(min_length=1)
     agent_code: str = Field(default="qa", min_length=1, max_length=100)
 
-    @field_validator("external_user_id", "phone", "agent_code")
+    @field_validator("token", "agent_code")
     @classmethod
     def strip_embed_fields(cls, value: str) -> str:
         return value.strip()
 
 
-class EmbedTokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "Bearer"
+class EmbedExchangeResponse(BaseModel):
+    authenticated: bool = True
     expires_in: int
-    expires_at: datetime
-
-
-class EmbedRefreshRequest(BaseModel):
-    access_token: str | None = None
 
 
 class EmbedSessionUser(BaseModel):
     id: str
-    external_user_id: str
-    name: str
     phone: str | None = None
 
 
@@ -157,20 +150,4 @@ class EmbedSessionStatusResponse(BaseModel):
     authenticated: bool
     user: EmbedSessionUser | None = None
     agent_code: str | None = None
-    access_expires_in: int = 0
-    refreshable: bool = False
-
-
-class EmbedRevokeRequest(BaseModel):
-    external_user_id: str | None = Field(default=None, max_length=100)
-    external_session_id: str | None = Field(default=None, max_length=100)
-    reason: str | None = Field(default="official_logout", max_length=100)
-
-    @field_validator("external_user_id", "external_session_id", "reason")
-    @classmethod
-    def strip_optional_embed_fields(cls, value: str | None) -> str | None:
-        return value.strip() if value else value
-
-
-class EmbedRevokeResponse(BaseModel):
-    revoked: bool
+    expires_in: int = 0

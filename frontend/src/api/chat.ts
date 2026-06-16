@@ -1,6 +1,6 @@
 /** SSE 流式聊天 API。 */
 
-import { getEmbedAccessToken } from '../utils/embedAuth'
+import { isEmbedSessionActive } from '../utils/embedAuth'
 
 export interface ChatPayload {
   question: string
@@ -48,13 +48,12 @@ export async function streamChat(
   payload: ChatPayload,
   onEvent: (event: StreamEvent) => void,
 ) {
-  const embedToken = getEmbedAccessToken()
   const response = await fetch(`/api/v1/chat/${agentCode}`, {
     method: 'POST',
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      ...(embedToken ? { Authorization: `Bearer ${embedToken}` } : {}),
+      ...(isEmbedSessionActive() ? { 'X-AgentHub-Embed': 'true' } : {}),
     },
     body: JSON.stringify(payload),
   })

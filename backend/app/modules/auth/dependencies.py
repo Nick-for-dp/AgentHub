@@ -24,6 +24,7 @@ def get_current_subject(
     request: Request,
     response: Response,
     authorization: str | None = Header(default=None),
+    x_agenthub_embed: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> AuthenticatedSubject:
     """从 Cookie Session 或 Authorization Header 解析调用主体。
@@ -40,6 +41,7 @@ def get_current_subject(
     service = AuthService(db)
     settings = get_settings()
     raw_session_id = request.cookies.get(settings.auth_cookie_name)
+    raw_embed_session_id = request.cookies.get(settings.embed_session_cookie_name)
     if authorization:
         # "Bearer <token>" → scheme="bearer", token="<token>"
         scheme, _, token = authorization.partition(" ")
@@ -47,7 +49,14 @@ def get_current_subject(
             raise UnauthorizedError("authorization must be bearer token")
         return service.authenticate_bearer_token(token)
 
+    if x_agenthub_embed and x_agenthub_embed.lower() == "true":
+        if not raw_embed_session_id:
+            raise UnauthorizedError("missing embed session")
+        return service.authenticate_embed_session_cookie(raw_embed_session_id)
+
     if not raw_session_id:
+        if raw_embed_session_id:
+            return service.authenticate_embed_session_cookie(raw_embed_session_id)
         raise UnauthorizedError("missing authentication credentials")
     subject = service.authenticate_session_cookie(raw_session_id)
     max_age_seconds = settings.session_idle_expire_minutes * 60

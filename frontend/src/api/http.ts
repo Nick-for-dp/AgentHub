@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { getEmbedAccessToken } from '../utils/embedAuth'
+import { isEmbedSessionActive } from '../utils/embedAuth'
 
 export const http = axios.create({
   baseURL: '/api/v1',
@@ -8,9 +8,8 @@ export const http = axios.create({
 })
 
 http.interceptors.request.use((config) => {
-  const token = getEmbedAccessToken()
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
+  if (isEmbedSessionActive()) {
+    config.headers['X-AgentHub-Embed'] = 'true'
   }
   return config
 })

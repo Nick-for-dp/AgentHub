@@ -30,6 +30,12 @@ class APIKeyStatus(StrEnum):
     REVOKED = "REVOKED"
 
 
+class EmbedSessionStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    EXPIRED = "EXPIRED"
+    REVOKED = "REVOKED"
+
+
 class SubjectType(StrEnum):
     USER = "USER"
     ORG_UNIT = "ORG_UNIT"

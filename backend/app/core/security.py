@@ -113,6 +113,32 @@ def clear_auth_cookie(response: Response) -> None:
     )
 
 
+def set_embed_cookie(response: Response, raw_session_id: str, max_age_seconds: int) -> None:
+    settings = get_settings()
+    response.set_cookie(
+        key=settings.embed_session_cookie_name,
+        value=raw_session_id,
+        max_age=max_age_seconds,
+        httponly=True,
+        secure=settings.embed_cookie_secure,
+        samesite=settings.embed_cookie_samesite,
+        domain=settings.embed_cookie_domain,
+        path="/",
+    )
+
+
+def clear_embed_cookie(response: Response) -> None:
+    settings = get_settings()
+    response.delete_cookie(
+        key=settings.embed_session_cookie_name,
+        domain=settings.embed_cookie_domain,
+        path="/",
+        samesite=settings.embed_cookie_samesite,
+        secure=settings.embed_cookie_secure,
+        httponly=True,
+    )
+
+
 def generate_api_key_for_phone(phone_normalized: str) -> GeneratedAPIKey:
     settings = get_settings()
     context = hmac.new(
@@ -219,70 +245,34 @@ def decode_access_token(token: str) -> dict[str, Any]:
     return payload
 
 
-def decode_embed_server_token(token: str) -> dict[str, Any]:
-    """验证官网后端调用 AgentHub embed 接口时使用的服务端 JWT。
-
-    该 token 由官网后端使用双方约定的 `embed_server_jwt_secret` 签发，
-    仅用于调用 `/embed/token`、`/embed/revoke` 等服务端接口。
-    """
+def decode_external_embed_token(token: str) -> dict[str, Any]:
+    """验证产业互联网后端签发的 iframe 嵌入短期用户态 JWT。"""
     settings = get_settings()
     payload = jwt.decode(
         token,
-        settings.embed_server_jwt_secret,
+        settings.embed_external_token_secret,
         algorithms=["HS256"],
-        options={"require": ["sub", "typ", "exp", "iat"]},
-    )
-    if payload.get("typ") != "embed_server":
-        raise jwt.InvalidTokenError("token type is not embed_server")
-    return payload
-
-
-def create_embed_access_token(
-    *,
-    session_id: str,
-    sub: str,
-    external_user_id: str,
-    phone: str,
-    agent_code: str,
-    org_unit_id: str | None,
-    expires_delta: timedelta | None = None,
-) -> str:
-    """签发官网嵌入场景使用的短期 access token。"""
-    settings = get_settings()
-    now = datetime.now(timezone.utc)
-    if expires_delta is None:
-        expires_delta = timedelta(minutes=settings.embed_access_token_expire_minutes)
-    payload = {
-        "sub": sub,
-        "sid": session_id,
-        "external_user_id": external_user_id,
-        "phone": phone,
-        "agent_code": agent_code,
-        "org_unit_id": org_unit_id,
-        "typ": "embed_access",
-        "jti": uuid.uuid4().hex,
-        "iat": now,
-        "exp": now + expires_delta,
-        "iss": settings.embed_token_issuer,
-    }
-    return jwt.encode(payload, settings.embed_access_token_secret, algorithm="HS256")
-
-
-def decode_embed_access_token(token: str, *, verify_exp: bool = True) -> dict[str, Any]:
-    """解码并验证 AgentHub 签发的 embed access token。"""
-    settings = get_settings()
-    payload = jwt.decode(
-        token,
-        settings.embed_access_token_secret,
-        algorithms=["HS256"],
-        issuer=settings.embed_token_issuer,
+        issuer=settings.embed_external_token_issuer,
+        audience=settings.embed_external_token_audience,
         options={
-            "require": ["sub", "sid", "external_user_id", "typ", "jti", "exp", "iat"],
-            "verify_exp": verify_exp,
+            "require": [
+                "external_user_id",
+                "phone",
+                "agent_code",
+                "typ",
+                "jti",
+                "exp",
+                "iat",
+            ]
         },
     )
     if payload.get("typ") != "embed_access":
         raise jwt.InvalidTokenError("token type is not embed_access")
+    scopes = payload.get("scope", [])
+    if isinstance(scopes, str):
+        scopes = [scopes]
+    if "agenthub:chat" not in scopes:
+        raise jwt.InvalidTokenError("token scope does not allow agenthub chat")
     return payload
 
 

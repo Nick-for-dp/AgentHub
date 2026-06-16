@@ -6,13 +6,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.enums import (
     APIKeyOwnerType,
     APIKeyStatus,
+    EmbedSessionStatus,
     PolicyEffect,
     ResourceStatus,
     ResourceType,
     SubjectType,
 )
 from app.db.base import Base
-from app.db.mixins import IDMixin, TimestampMixin
+from app.db.mixins import IDMixin, TimestampMixin, utcnow
 
 
 class AuthSession(IDMixin, TimestampMixin, Base):
@@ -35,29 +36,26 @@ class AuthSession(IDMixin, TimestampMixin, Base):
     client_ip_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
-class EmbedSession(IDMixin, TimestampMixin, Base):
+class EmbedSession(IDMixin, Base):
     __tablename__ = "embed_session"
     __table_args__ = (
         Index("ix_embed_session_hash", "session_hash"),
         Index("ix_embed_session_external_user", "external_user_id"),
-        Index("ix_embed_session_external_session", "external_session_id"),
         Index("ix_embed_session_user", "user_id"),
+        Index("ix_embed_session_agent_code", "agent_code"),
         Index("ix_embed_session_status", "status"),
+        Index("ix_embed_session_expires_at", "expires_at"),
     )
 
     session_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     external_user_id: Mapped[str] = mapped_column(String(100), nullable=False)
-    external_session_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    phone_normalized: Mapped[str] = mapped_column(String(32), nullable=False)
+    phone_normalized: Mapped[str | None] = mapped_column(String(32), nullable=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("user_account.id"), nullable=False)
-    org_unit_id: Mapped[str | None] = mapped_column(ForeignKey("org_unit.id"), nullable=True)
     agent_code: Mapped[str] = mapped_column(String(100), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default=ResourceStatus.ACTIVE)
-    access_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    refresh_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=EmbedSessionStatus.ACTIVE)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    revoke_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class APIKey(IDMixin, TimestampMixin, Base):

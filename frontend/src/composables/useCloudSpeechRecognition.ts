@@ -9,6 +9,7 @@ interface SpeechRecognitionStartOptions {
 }
 
 export function useCloudSpeechRecognition() {
+  const isStarting = ref(false)
   const isRecording = ref(false)
   const isTranscribing = ref(false)
   const isSupported = ref(
@@ -23,12 +24,16 @@ export function useCloudSpeechRecognition() {
   let audioContext: AudioContext | null = null
   let source: MediaStreamAudioSourceNode | null = null
   let processor: ScriptProcessorNode | null = null
+  let silentGain: GainNode | null = null
   let chunks: Float32Array[] = []
   let sampleRate = 44100
+  let stopRequested = false
   let options: SpeechRecognitionStartOptions = {}
 
   async function start(startOptions: SpeechRecognitionStartOptions = {}): Promise<void> {
-    if (!isSupported.value || isRecording.value || isTranscribing.value) return
+    if (!isSupported.value || isStarting.value || isRecording.value || isTranscribing.value) return
+    isStarting.value = true
+    stopRequested = false
     options = startOptions
     error.value = ''
     transcript.value = ''
@@ -44,25 +49,39 @@ export function useCloudSpeechRecognition() {
         },
       })
       audioContext = new AudioContext()
+      await audioContext.resume()
       sampleRate = audioContext.sampleRate
       source = audioContext.createMediaStreamSource(stream)
       processor = audioContext.createScriptProcessor(4096, 1, 1)
+      silentGain = audioContext.createGain()
+      silentGain.gain.value = 0
       processor.onaudioprocess = (event) => {
         if (!isRecording.value) return
         chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)))
       }
       source.connect(processor)
-      processor.connect(audioContext.destination)
+      processor.connect(silentGain)
+      silentGain.connect(audioContext.destination)
+      if (stopRequested) {
+        cleanup()
+        return
+      }
       isRecording.value = true
     } catch (err) {
       const message = err instanceof Error ? err.message : 'microphone-error'
       error.value = message
       cleanup()
       options.onError?.(message)
+    } finally {
+      isStarting.value = false
     }
   }
 
   async function stop(): Promise<void> {
+    if (isStarting.value) {
+      stopRequested = true
+      return
+    }
     if (!isRecording.value) return
     isRecording.value = false
     const audioChunks = chunks
@@ -71,7 +90,16 @@ export function useCloudSpeechRecognition() {
 
     isTranscribing.value = true
     try {
-      const wav = encodeWav(mergeChunks(audioChunks), sampleRate, 16000)
+      const merged = mergeChunks(audioChunks)
+      const wav = encodeWav(merged, sampleRate, 16000)
+      if (import.meta.env.DEV) {
+        console.debug('[AgentHub ASR] captured audio', {
+          inputSampleRate: sampleRate,
+          inputSamples: merged.length,
+          durationMs: Math.round((merged.length / sampleRate) * 1000),
+          wavBytes: wav.size,
+        })
+      }
       const result = await transcribeAudio(wav)
       transcript.value = result.text.trim()
       options.onEnd?.(transcript.value)
@@ -92,9 +120,12 @@ export function useCloudSpeechRecognition() {
   }
 
   function cleanup(): void {
+    processor && (processor.onaudioprocess = null)
     processor?.disconnect()
+    silentGain?.disconnect()
     source?.disconnect()
     processor = null
+    silentGain = null
     source = null
     stream?.getTracks().forEach(track => track.stop())
     stream = null
@@ -107,6 +138,7 @@ export function useCloudSpeechRecognition() {
   })
 
   return {
+    isStarting,
     isRecording,
     isTranscribing,
     isListening: isRecording,
@@ -177,4 +209,3 @@ function writeString(view: DataView, offset: number, value: string): void {
     view.setUint8(offset + i, value.charCodeAt(i))
   }
 }
-

@@ -1,33 +1,37 @@
 import { http } from './http'
 
-export interface EmbedTokenResponse {
-  access_token: string
-  token_type: string
+export interface EmbedExchangeResponse {
+  authenticated: boolean
   expires_in: number
-  expires_at: string
 }
 
 export interface EmbedSessionStatus {
   authenticated: boolean
   user?: {
     id: string
-    external_user_id: string
-    name: string
     phone?: string
   } | null
   agent_code?: string | null
-  access_expires_in: number
-  refreshable: boolean
+  expires_in: number
 }
 
-export async function refreshEmbedToken(accessToken?: string): Promise<EmbedTokenResponse> {
-  const { data } = await http.post<EmbedTokenResponse>('/embed/refresh', {
-    access_token: accessToken,
+export async function exchangeEmbedToken(
+  token: string,
+  agentCode: string,
+): Promise<EmbedExchangeResponse> {
+  const { data } = await http.post<EmbedExchangeResponse>('/embed/exchange', {
+    token,
+    agent_code: agentCode,
   })
   return data
 }
 
 export async function getEmbedSession(): Promise<EmbedSessionStatus> {
   const { data } = await http.get<EmbedSessionStatus>('/embed/session')
+  return data
+}
+
+export async function logoutEmbedSession(): Promise<{ revoked: boolean }> {
+  const { data } = await http.post<{ revoked: boolean }>('/embed/logout')
   return data
 }

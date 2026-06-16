@@ -91,6 +91,9 @@ pnpm-debug.log*
 tmp/
 temp/
 
+# Local-only integration tools
+devtools/
+
 # Project development documents for local agent collaboration
 docs/
 CLAUDE.md

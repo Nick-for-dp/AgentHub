@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.enums import CallerType, ConversationStatus, ResourceType
-from app.core.exceptions import UnauthorizedError
+from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.responses import APIResponse, success
 from app.db.session import get_db
 from app.modules.agent.service import AgentService
@@ -40,7 +40,11 @@ def _assert_agent_access(
     agent_code: str,
 ):
     agent = AgentService(db).get_agent_by_code(agent_code)
-    AuthService(db).assert_allowed(subject, ResourceType.AGENT, agent.id, "invoke")
+    if subject.embed_session_id is not None:
+        if subject.embed_agent_code != agent_code:
+            raise ForbiddenError("embed session cannot access this agent")
+    else:
+        AuthService(db).assert_allowed(subject, ResourceType.AGENT, agent.id, "invoke")
     return agent
 
 

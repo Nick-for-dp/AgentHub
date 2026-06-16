@@ -254,11 +254,10 @@
           :title="speech.isRecording.value ? '松开结束录音' : '长按语音输入'"
           size="large"
           class="composer-icon-button"
-          @mousedown.prevent="startSpeechInput"
-          @mouseup.prevent="stopSpeechInput"
-          @mouseleave.prevent="stopSpeechInput"
-          @touchstart.prevent="startSpeechInput"
-          @touchend.prevent="stopSpeechInput"
+          @pointerdown.prevent="startSpeechInput"
+          @pointerup.prevent="stopSpeechInput"
+          @pointercancel.prevent="stopSpeechInput"
+          @contextmenu.prevent
         >
           <template #icon>
             <PauseCircleOutlined v-if="speech.isRecording.value" />
@@ -313,13 +312,8 @@ import type { Conversation, ConversationMessage } from '../../api/conversations'
 import { useAuthStore } from '../../stores/auth'
 import { useCloudSpeechRecognition } from '../../composables/useCloudSpeechRecognition'
 import { useCloudSpeechSynthesis } from '../../composables/useCloudSpeechSynthesis'
-import { refreshEmbedToken } from '../../api/embed'
-import {
-  clearEmbedAccessToken,
-  getEmbedAccessToken,
-  getJwtExpiresAt,
-  setEmbedAccessToken,
-} from '../../utils/embedAuth'
+import { exchangeEmbedToken, getEmbedSession, logoutEmbedSession } from '../../api/embed'
+import { setEmbedSessionActive } from '../../utils/embedAuth'
 
 // 配置 marked
 marked.setOptions({ breaks: true, gfm: true })
@@ -511,11 +505,11 @@ function mapConversationMessage(item: ConversationMessage): Message | null {
 const router = useRouter()
 const auth = useAuthStore()
 const isEmbedMode = computed(() => router.currentRoute.value.meta.embed === true)
-const embedToken = ref('')
+const embedSessionReady = ref(false)
 const embedAuthExpired = ref(false)
 const canChat = computed(() => (
   isEmbedMode.value
-    ? !!embedToken.value && !embedAuthExpired.value
+    ? embedSessionReady.value && !embedAuthExpired.value
     : auth.isLoggedIn
 ))
 const hasConversationAccess = computed(() => canChat.value)
@@ -547,6 +541,7 @@ const sidebarVisible = ref(window.innerWidth >= 768)
 // 语音能力
 const speech = useCloudSpeechRecognition()
 const synth = useCloudSpeechSynthesis()
+let speechPointerId: number | null = null
 const speechPlaceholder = computed(() => {
   if (speech.isRecording.value) return '正在录音，松开发送识别'
   if (speech.isTranscribing.value) return '正在转写语音...'
@@ -557,11 +552,18 @@ const speechPlaceholder = computed(() => {
 // 同时保证每一步至少可见一小段时间，避免用户看到“一整串步骤瞬间出现”。
 const STEP_REVEAL_GAP_MS = 520
 const STEP_MIN_VISIBLE_MS = 700
+const EMBED_SESSION_RENEW_LEAD_SECONDS = 180
+const EMBED_SESSION_MIN_RENEW_DELAY_MS = 5000
 const queuedSteps: QueuedStep[] = []
 const stepTimers = new Set<ReturnType<typeof setTimeout>>()
 let isDrainingStepQueue = false
 let scrollTimer: ReturnType<typeof setTimeout> | null = null
-let embedRefreshTimer: ReturnType<typeof setTimeout> | null = null
+const embedParentOrigin = ref('')
+let embedExchangeInFlight = false
+let pendingEmbedTokenRequestId = ''
+let queuedEmbedToken = ''
+let embedRenewTimer: ReturnType<typeof setTimeout> | null = null
+const consumedEmbedTokenJtis = new Set<string>()
 
 function syncConversationUrl(id: string | null): void {
   const query = { ...router.currentRoute.value.query }
@@ -857,21 +859,47 @@ function enqueueStepUpdate(message: Message, node: NodeEventPayload, eventName?:
 }
 
 // 语音输入：长按录音，松开后将云端识别结果填入输入框
-function startSpeechInput(): void {
-  if (speech.isRecording.value || speech.isTranscribing.value || !canChat.value) return
+function startSpeechInput(event?: PointerEvent): void {
+  if (event?.pointerType === 'mouse' && event.button !== 0) return
+  if (speechPointerId !== null || speech.isStarting.value || speech.isRecording.value || speech.isTranscribing.value || !canChat.value) return
+  speechPointerId = event?.pointerId ?? null
+  const target = event?.currentTarget
+  if (target instanceof HTMLElement && event) {
+    try {
+      target.setPointerCapture(event.pointerId)
+    } catch {
+      // Pointer capture can fail if the pointer was already released.
+    }
+  }
   speech.clearTranscript()
   void speech.start({
     onEnd: (text) => {
+      speechPointerId = null
       void finishSpeechInput(text)
     },
     onError: (error) => {
+      speechPointerId = null
       errorMsg.value = getSpeechErrorMessage(error)
     },
+  }).finally(() => {
+    if (!speech.isStarting.value && !speech.isRecording.value) {
+      speechPointerId = null
+    }
   })
 }
 
-function stopSpeechInput(): void {
-  if (!speech.isRecording.value) return
+function stopSpeechInput(event?: PointerEvent): void {
+  if (event && speechPointerId !== null && event.pointerId !== speechPointerId) return
+  const target = event?.currentTarget
+  if (target instanceof HTMLElement && event) {
+    try {
+      target.releasePointerCapture(event.pointerId)
+    } catch {
+      // Pointer capture may already be released after pointercancel.
+    }
+  }
+  speechPointerId = null
+  if (!speech.isStarting.value && !speech.isRecording.value) return
   void speech.stop()
 }
 
@@ -977,7 +1005,11 @@ onMounted(() => {
   window.addEventListener('resize', onWindowResize)
   if (isEmbedMode.value) {
     window.addEventListener('message', handleEmbedMessage)
-    postEmbedMessage('AGENTHUB_TOKEN_REQUIRED')
+    setEmbedSessionActive(false)
+    postEmbedMessage('AGENTHUB_READY')
+    void restoreEmbedSession().then((restored) => {
+      if (!restored) requestEmbedToken('initial')
+    })
   } else {
     void restoreCurrentConversation()
     if (auth.isLoggedIn) {
@@ -989,10 +1021,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', onWindowResize)
   window.removeEventListener('message', handleEmbedMessage)
-  if (embedRefreshTimer) {
-    clearTimeout(embedRefreshTimer)
-    embedRefreshTimer = null
-  }
+  clearEmbedRenewTimer()
   if (scrollTimer) {
     clearTimeout(scrollTimer)
     scrollTimer = null
@@ -1003,7 +1032,8 @@ onUnmounted(() => {
   }
   stepTimers.clear()
   if (isEmbedMode.value) {
-    clearEmbedAccessToken()
+    setEmbedSessionActive(false)
+    void logoutEmbedSession()
   }
   stopTypewriter()
   synth.stop()
@@ -1048,75 +1078,167 @@ function initAgentCodeFromRoute(): void {
   }
 }
 
-function postEmbedMessage(type: string, payload: Record<string, unknown> = {}): void {
-  if (!isEmbedMode.value || window.parent === window) return
-  window.parent.postMessage({ type, ...payload }, '*')
+function getAllowedEmbedOrigins(): string[] {
+  return (import.meta.env.VITE_EMBED_ALLOWED_PARENT_ORIGINS || '')
+    .split(',')
+    .map((item: string) => item.trim())
+    .filter(Boolean)
 }
 
-function applyEmbedToken(token: string): void {
-  embedToken.value = token
-  embedAuthExpired.value = false
-  setEmbedAccessToken(token)
-  scheduleEmbedRefresh(token)
+function getJwtClaim(token: string, claimName: string): string | null {
+  const [, payload] = token.split('.')
+  if (!payload) return null
+  try {
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')
+    const json = decodeURIComponent(
+      Array.from(atob(padded))
+        .map(char => `%${char.charCodeAt(0).toString(16).padStart(2, '0')}`)
+        .join(''),
+    )
+    const claims = JSON.parse(json) as Record<string, unknown>
+    const value = claims[claimName]
+    return typeof value === 'string' && value.trim() ? value : null
+  } catch {
+    return null
+  }
+}
+
+function postEmbedMessage(type: string, payload: Record<string, unknown> = {}): void {
+  if (!isEmbedMode.value || window.parent === window) return
+  const allowedOrigins = getAllowedEmbedOrigins()
+  const targetOrigin = embedParentOrigin.value || (allowedOrigins.length === 1 ? allowedOrigins[0] : '*')
+  window.parent.postMessage({ type, ...payload }, targetOrigin)
+}
+
+function requestEmbedToken(reason: 'initial' | 'renew' | 'unauthorized'): void {
+  const requestId = crypto.randomUUID()
+  pendingEmbedTokenRequestId = requestId
+  postEmbedMessage('AGENTHUB_TOKEN_REQUIRED', {
+    request_id: requestId,
+    reason,
+    renew_before_seconds: EMBED_SESSION_RENEW_LEAD_SECONDS,
+  })
+}
+
+function clearEmbedRenewTimer(): void {
+  if (!embedRenewTimer) return
+  clearTimeout(embedRenewTimer)
+  embedRenewTimer = null
+}
+
+function scheduleEmbedRenew(expiresIn: number): void {
+  clearEmbedRenewTimer()
+  if (!isEmbedMode.value || !embedSessionReady.value || expiresIn <= 0) return
+  const expiresInMs = expiresIn * 1000
+  const renewLeadMs = EMBED_SESSION_RENEW_LEAD_SECONDS * 1000
+  const halfLifeDelayMs = Math.max(1000, Math.floor(expiresInMs / 2))
+  const renewDelayMs = expiresInMs > renewLeadMs
+    ? expiresInMs - renewLeadMs
+    : Math.min(EMBED_SESSION_MIN_RENEW_DELAY_MS, halfLifeDelayMs)
+  embedRenewTimer = setTimeout(() => {
+    embedRenewTimer = null
+    if (!isEmbedMode.value || !embedSessionReady.value || embedAuthExpired.value) return
+    requestEmbedToken('renew')
+  }, renewDelayMs)
+}
+
+async function restoreEmbedSession(): Promise<boolean> {
+  if (!isEmbedMode.value) return false
+  try {
+    setEmbedSessionActive(true)
+    const session = await getEmbedSession()
+    embedSessionReady.value = session.authenticated
+    embedAuthExpired.value = !session.authenticated
+    setEmbedSessionActive(session.authenticated)
+    if (session.authenticated) {
+      scheduleEmbedRenew(session.expires_in)
+      await restoreCurrentConversation()
+      await refreshConversationList()
+      return true
+    } else {
+      clearEmbedRenewTimer()
+    }
+  } catch {
+    setEmbedSessionActive(false)
+    embedSessionReady.value = false
+    embedAuthExpired.value = true
+    clearEmbedRenewTimer()
+  }
+  return false
 }
 
 async function activateEmbedSession(token: string): Promise<void> {
+  if (embedExchangeInFlight) {
+    queuedEmbedToken = token
+    return
+  }
+  const tokenJti = getJwtClaim(token, 'jti')
+  if (!tokenJti || consumedEmbedTokenJtis.has(tokenJti)) {
+    return
+  }
+  consumedEmbedTokenJtis.add(tokenJti)
   const shouldRestoreSession = !hasConversationAccess.value
-  applyEmbedToken(token)
-  if (shouldRestoreSession) {
-    await restoreCurrentConversation()
-    await refreshConversationList()
-  }
-}
-
-function scheduleEmbedRefresh(token: string): void {
-  if (embedRefreshTimer) {
-    clearTimeout(embedRefreshTimer)
-    embedRefreshTimer = null
-  }
-  const expiresAt = getJwtExpiresAt(token)
-  if (!expiresAt) return
-  const refreshInMs = Math.max(1000, expiresAt - Date.now() - 60_000)
-  embedRefreshTimer = setTimeout(() => {
-    void refreshEmbedAccessToken()
-  }, refreshInMs)
-}
-
-async function refreshEmbedAccessToken(): Promise<boolean> {
-  if (!isEmbedMode.value || !embedToken.value) return false
+  embedExchangeInFlight = true
   try {
-    const resp = await refreshEmbedToken(embedToken.value)
-    applyEmbedToken(resp.access_token)
-    postEmbedMessage('AGENTHUB_TOKEN_REFRESHED', {
-      expires_in: resp.expires_in,
-      expires_at: resp.expires_at,
-    })
-    return true
+    setEmbedSessionActive(true)
+    const resp = await exchangeEmbedToken(token, agentCode.value)
+    embedSessionReady.value = true
+    embedAuthExpired.value = false
+    setEmbedSessionActive(true)
+    scheduleEmbedRenew(resp.expires_in)
+    if (shouldRestoreSession) {
+      await restoreCurrentConversation()
+      await refreshConversationList()
+    }
   } catch {
-    clearEmbedAccessToken()
-    embedToken.value = ''
+    setEmbedSessionActive(false)
+    embedSessionReady.value = false
     embedAuthExpired.value = true
-    postEmbedMessage('AGENTHUB_AUTH_EXPIRED')
-    return false
+    clearEmbedRenewTimer()
+    errorMsg.value = '鉴权失败，请重新打开营销智能体'
+    postEmbedMessage('AGENTHUB_AUTH_REQUIRED')
+  } finally {
+    embedExchangeInFlight = false
+    const nextToken = queuedEmbedToken
+    queuedEmbedToken = ''
+    if (nextToken) {
+      void activateEmbedSession(nextToken)
+    }
   }
+}
+
+async function clearEmbedSession(): Promise<void> {
+  setEmbedSessionActive(false)
+  pendingEmbedTokenRequestId = ''
+  queuedEmbedToken = ''
+  embedExchangeInFlight = false
+  clearEmbedRenewTimer()
+  embedSessionReady.value = false
+  embedAuthExpired.value = true
+  messages.value = []
+  conversationList.value = []
+  conversationId.value = null
+  conversationTitle.value = ''
+  await logoutEmbedSession()
 }
 
 function handleEmbedMessage(event: MessageEvent): void {
   if (!isEmbedMode.value) return
-  const allowedOrigins = (import.meta.env.VITE_EMBED_ALLOWED_PARENT_ORIGINS || '')
-    .split(',')
-    .map((item: string) => item.trim())
-    .filter(Boolean)
+  const allowedOrigins = getAllowedEmbedOrigins()
   if (allowedOrigins.length > 0 && !allowedOrigins.includes(event.origin)) {
     return
   }
-  if (event.data?.type === 'AGENTHUB_ACCESS_TOKEN' && typeof event.data.token === 'string') {
+  if (!embedParentOrigin.value) {
+    embedParentOrigin.value = event.origin
+  }
+  if (event.data?.type === 'AGENTHUB_EMBED_TOKEN' && typeof event.data.token === 'string') {
+    if (event.data.request_id !== pendingEmbedTokenRequestId) return
+    pendingEmbedTokenRequestId = ''
     void activateEmbedSession(event.data.token)
   }
-  if (event.data?.type === 'AGENTHUB_AUTH_EXPIRED') {
-    clearEmbedAccessToken()
-    embedToken.value = ''
-    embedAuthExpired.value = true
+  if (event.data?.type === 'AGENTHUB_AUTH_CLEARED') {
+    void clearEmbedSession()
   }
 }
 
@@ -1130,16 +1252,7 @@ async function send() {
   errorMsg.value = ''
   thoughtOpen.value = true
 
-  if (isEmbedMode.value) {
-    const expiresAt = getJwtExpiresAt(embedToken.value)
-    if (expiresAt && Date.now() >= expiresAt - 30_000) {
-      const refreshed = await refreshEmbedAccessToken()
-      if (!refreshed) {
-        errorMsg.value = '官网登录态已失效，请重新登录官网'
-        return
-      }
-    }
-  } else {
+  if (!isEmbedMode.value) {
     const sessionReady = await auth.ensureFreshSessionForChat()
     if (!sessionReady) {
       errorMsg.value = '登录已失效，请重新登录'
@@ -1217,12 +1330,12 @@ async function send() {
     assistantMsg.displayThought = assistantMsg.thought
     if (e.status === 401) {
       if (isEmbedMode.value) {
-        const refreshed = await refreshEmbedAccessToken()
-        if (refreshed) {
-          errorMsg.value = '登录态已刷新，请重新发送'
-        } else {
-          errorMsg.value = '官网登录态已失效，请重新登录官网'
-        }
+        setEmbedSessionActive(false)
+        embedSessionReady.value = false
+        embedAuthExpired.value = true
+        clearEmbedRenewTimer()
+        errorMsg.value = '鉴权已失效，正在重新授权，请稍后重试'
+        requestEmbedToken('unauthorized')
       } else {
         // token 过期或无效，清理登录态并跳转
         auth.clearSession()
