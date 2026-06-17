@@ -172,6 +172,47 @@ def _is_sensitive_key(key: str) -> bool:
 
 # ── 密码哈希 ──────────────────────────────────────────────────
 
+FORBIDDEN_PASSWORD_CHARS = frozenset("!#$%")
+KEYBOARD_SEQUENCES = (
+    "0123456789",
+    "qwertyuiop",
+    "asdfghjkl",
+    "zxcvbnm",
+)
+
+
+def validate_password_strength(password: str) -> None:
+    """Validate password strength for user-created login credentials."""
+    if not 8 <= len(password) <= 20:
+        raise ValueError("密码长度必须为 8 到 20 位")
+    if any(char.isspace() for char in password):
+        raise ValueError("密码不能包含空格")
+    forbidden = sorted({char for char in password if char in FORBIDDEN_PASSWORD_CHARS})
+    if forbidden:
+        raise ValueError("密码不能包含字符：!#$%")
+    if not any(char.islower() for char in password):
+        raise ValueError("密码至少包含 1 个小写字母")
+    if not any(char.isupper() for char in password):
+        raise ValueError("密码至少包含 1 个大写字母")
+    if not any(char.isdigit() for char in password):
+        raise ValueError("密码至少包含 1 个数字")
+    if re.search(r"(.)\1{4,}", password):
+        raise ValueError("密码不能包含连续 5 个相同字符")
+    lowered = password.lower()
+    for index in range(0, len(lowered) - 2):
+        segment = lowered[index: index + 3]
+        if _is_keyboard_sequence(segment):
+            raise ValueError("密码不能包含 3 个及以上键盘连续字符")
+
+
+def _is_keyboard_sequence(segment: str) -> bool:
+    if len(segment) < 3:
+        return False
+    for sequence in KEYBOARD_SEQUENCES:
+        if segment in sequence or segment in sequence[::-1]:
+            return True
+    return False
+
 
 def hash_password(password: str) -> str:
     """对密码进行 bcrypt 慢哈希，返回哈希字符串。"""

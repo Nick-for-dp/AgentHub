@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.enums import OrgUnitType, ResourceStatus, UserType
+from app.core.security import validate_password_strength
 
 
 class OrgUnitCreate(BaseModel):
@@ -29,13 +30,20 @@ class UserCreate(BaseModel):
     user_type: UserType = UserType.EXTERNAL_CUSTOMER
     email: str | None = None
     phone: str | None = None
-    password: str | None = Field(default=None, min_length=6, max_length=128)
+    password: str | None = None
     remark: str | None = None
 
     @field_validator("phone")
     @classmethod
     def strip_phone(cls, value: str | None) -> str | None:
         return value.strip() if value else value
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str | None) -> str | None:
+        if value is not None:
+            validate_password_strength(value)
+        return value
 
 
 class UserRead(BaseModel):
