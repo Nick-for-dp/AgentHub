@@ -19,7 +19,6 @@ from app.core.enums import (
 )
 from app.core.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
 from app.core.security import (
-    decode_access_token,
     decode_external_embed_token,
     generate_api_key_for_phone,
     generate_session_id,
@@ -438,41 +437,6 @@ class AuthService:
             session.revoked_at = datetime.now(timezone.utc)
             self.repository.save_auth_session(session)
             self.db.commit()
-
-    def authenticate_user_token(self, token: str) -> AuthenticatedSubject:
-        """验证用户 JWT token，返回 AuthenticatedSubject。
-
-        解码 token 后重新检查用户和组织状态，验证 token_version。
-        token 签发后被停用或 token_version 变更会导致认证失败。
-        """
-        try:
-            claims = decode_access_token(token)
-        except Exception:
-            raise UnauthorizedError("token 无效或已过期")
-
-        user = self.org_repository.get_user(claims["sub"])
-        if user is None or user.status != ResourceStatus.ACTIVE:
-            raise UnauthorizedError("用户不存在或已停用")
-        if user.token_version != claims.get("token_version"):
-            # 改密码、强制下线、管理员停用后旧 token 失效
-            raise UnauthorizedError("token 已失效，请重新登录")
-
-        org_unit = self.org_repository.get_org_unit(user.org_unit_id)
-        if org_unit is None or org_unit.status != ResourceStatus.ACTIVE:
-            raise UnauthorizedError("所属组织不存在或已停用")
-
-        return AuthenticatedSubject(
-            caller_type=CallerType.USER,
-            user_id=user.id,
-            org_unit_id=user.org_unit_id,
-        )
-
-    def refresh_access_token(self, _token: str) -> SessionResponse:
-        """用未过期的 access token 换取新 token。
-
-        重新检查用户/组织状态和 token_version。
-        """
-        raise UnauthorizedError("浏览器登录态已迁移到 session cookie")
 
     def _get_valid_session(
         self,

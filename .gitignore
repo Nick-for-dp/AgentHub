@@ -74,6 +74,8 @@ frontend/.vite/
 .cache/
 *.tsbuildinfo
 frontend/tsconfig.tsbuildinfo
+# Volar / vue-tsc 生成的 .vue.js 影子文件，不应进入仓库
+*.vue.js
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
