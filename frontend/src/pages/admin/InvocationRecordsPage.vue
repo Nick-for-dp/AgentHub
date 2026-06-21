@@ -144,8 +144,14 @@
         <h4>输出 (output)</h4>
         <pre class="json-block">{{ JSON.stringify(detail.output, null, 2) }}</pre>
 
-        <h4>运行时快照 (runtime_snapshot)</h4>
-        <pre class="json-block">{{ JSON.stringify(detail.runtime_snapshot, null, 2) }}</pre>
+        <h4>检索快照 (snapshot.retrieval)</h4>
+        <pre class="json-block">{{ JSON.stringify((detail.snapshot as any)?.retrieval ?? {}, null, 2) }}</pre>
+
+        <h4>模型快照 (snapshot.model)</h4>
+        <pre class="json-block">{{ JSON.stringify((detail.snapshot as any)?.model ?? {}, null, 2) }}</pre>
+
+        <h4>运行时快照 (snapshot.runtime)</h4>
+        <pre class="json-block">{{ JSON.stringify((detail.snapshot as any)?.runtime ?? {}, null, 2) }}</pre>
 
         <h4>Token 用量</h4>
         <pre class="json-block">{{ JSON.stringify(detail.token_usage, null, 2) }}</pre>

@@ -5,11 +5,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 DEV_EMBED_EXTERNAL_TOKEN_SECRET = "dev-industrial-embed-token-secret-change-me"
+DEV_API_KEY_SIGNING_SECRET = "dev-only-change-me-please"
+DEV_AUTH_TOKEN_SECRET = "dev-auth-secret-change-me-please"
 PRODUCTION_ENVIRONMENTS = frozenset({"prod", "production"})
 PRODUCTION_EMBED_SECRET_MIN_LENGTH = 32
 INSECURE_EMBED_SECRET_VALUES = frozenset(
     {
         DEV_EMBED_EXTERNAL_TOKEN_SECRET,
+        DEV_API_KEY_SIGNING_SECRET,
+        DEV_AUTH_TOKEN_SECRET,
         "change-me-to-industrial-embed-token-secret",
     }
 )
@@ -24,7 +28,10 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     server_host: str = "0.0.0.0"
     server_port: int = 8240
-    database_url: str = "postgresql+psycopg://agenthub:agenthub@localhost:5432/agenthub"
+    database_url: str = "mysql+pymysql://agenthub:agenthub@localhost:3306/agenthub?charset=utf8mb4"
+    # 单元测试使用的独立数据库；必须与开发/生产库分开，测试会反复建表删表。
+    # 必须在 .env 显式配置 TEST_DATABASE_URL；未配置时运行测试会直接报错，避免误连业务库。
+    test_database_url: str | None = None
     redis_url: str = "redis://localhost:6379/0"
     api_key_signing_secret: str = Field(default="dev-only-change-me-please", min_length=16)
     # 登录态配置
@@ -87,14 +94,22 @@ class Settings(BaseSettings):
         ]
 
     @model_validator(mode="after")
-    def validate_production_embed_secrets(self) -> "Settings":
-        if self.environment.strip().lower() not in PRODUCTION_ENVIRONMENTS or not self.embed_enabled:
+    def validate_production_secrets(self) -> "Settings":
+        """生产环境强校验关键密钥，禁止使用公开默认值或带占位标记的弱密钥。
+
+        覆盖签发 API Key、登录 token 以及（启用嵌入时）产业互联网 embed 验签密钥，
+        避免生产误用代码内置的开发默认值导致凭证可被伪造。
+        """
+        if self.environment.strip().lower() not in PRODUCTION_ENVIRONMENTS:
             return self
 
-        _validate_production_embed_secret(
-            "EMBED_EXTERNAL_TOKEN_SECRET",
-            self.embed_external_token_secret,
-        )
+        _validate_production_secret("API_KEY_SIGNING_SECRET", self.api_key_signing_secret)
+        _validate_production_secret("AUTH_TOKEN_SECRET", self.auth_token_secret)
+        if self.embed_enabled:
+            _validate_production_secret(
+                "EMBED_EXTERNAL_TOKEN_SECRET",
+                self.embed_external_token_secret,
+            )
         return self
 
 
@@ -103,7 +118,7 @@ def get_settings() -> Settings:
     return Settings()
 
 
-def _validate_production_embed_secret(name: str, value: str) -> None:
+def _validate_production_secret(name: str, value: str) -> None:
     normalized = value.strip()
     if normalized in INSECURE_EMBED_SECRET_VALUES:
         raise ValueError(f"{name} must be changed from the public development placeholder")

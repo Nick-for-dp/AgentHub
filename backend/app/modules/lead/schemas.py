@@ -1,4 +1,4 @@
-from datetime import datetime
+from app.core.datetime import BeijingDateTime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -85,7 +85,7 @@ class LeadCaptureEventRead(BaseModel):
     raw_delta: dict[str, Any]
     normalized_delta: dict[str, Any]
     followup_decision: dict[str, Any]
-    created_at: datetime
+    created_at: BeijingDateTime
 
 
 class SalesLeadRead(BaseModel):
@@ -113,8 +113,8 @@ class SalesLeadRead(BaseModel):
     has_contact: bool = False
     event_count: int = 0
     latest_event: LeadCaptureEventRead | None = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: BeijingDateTime
+    updated_at: BeijingDateTime
 
 
 class SalesLeadPage(BaseModel):

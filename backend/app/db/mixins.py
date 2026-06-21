@@ -1,12 +1,13 @@
 from datetime import datetime, timezone
-from uuid import uuid4
 
 from sqlalchemy import DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
+from uuid6 import uuid7
 
 
 def uuid_str() -> str:
-    return str(uuid4())
+    # 使用 UUIDv7（时间有序），缓解 MySQL InnoDB 聚簇索引下随机 UUID 主键的页分裂和写放大
+    return str(uuid7())
 
 
 def utcnow() -> datetime:

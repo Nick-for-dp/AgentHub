@@ -1,4 +1,4 @@
-from datetime import datetime
+from app.core.datetime import BeijingDateTime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -20,8 +20,8 @@ class OrgUnitRead(BaseModel):
     type: OrgUnitType
     parent_id: str | None
     status: ResourceStatus
-    created_at: datetime
-    updated_at: datetime
+    created_at: BeijingDateTime
+    updated_at: BeijingDateTime
 
 
 class UserCreate(BaseModel):
@@ -58,5 +58,5 @@ class UserRead(BaseModel):
     phone_normalized: str | None
     status: ResourceStatus
     remark: str | None
-    created_at: datetime
-    updated_at: datetime
+    created_at: BeijingDateTime
+    updated_at: BeijingDateTime

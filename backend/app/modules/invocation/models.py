@@ -18,7 +18,6 @@ class AgentInvocationRecord(IDMixin, Base):
     )
 
     request_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     agent_id: Mapped[str] = mapped_column(ForeignKey("agent.id"), nullable=False)
     org_unit_id: Mapped[str | None] = mapped_column(ForeignKey("org_unit.id"), nullable=True)
     user_id: Mapped[str | None] = mapped_column(ForeignKey("user_account.id"), nullable=True)
@@ -34,12 +33,9 @@ class AgentInvocationRecord(IDMixin, Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_usage: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     latency_ms: Mapped[int | None] = mapped_column(nullable=True)
-    retrieval_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    model_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    runtime_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # 合并后的运行时快照，内部固定保留 retrieval / model / runtime 三个顶层子键，
+    # 便于审计与前端按维度读取检索、模型、运行时（含 node_trace、dify_metadata 等）信息
+    snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     session_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    parent_id: Mapped[str | None] = mapped_column(ForeignKey("agent_invocation_record.id"), nullable=True)
-    feedback_score: Mapped[int | None] = mapped_column(nullable=True)
-    evaluation_score: Mapped[float | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

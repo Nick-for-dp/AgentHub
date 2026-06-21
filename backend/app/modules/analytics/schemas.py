@@ -1,6 +1,6 @@
 """Analytics Pydantic schemas — 只读统计指标的请求/响应模型。"""
 
-from datetime import datetime
+from app.core.datetime import BeijingDateTime
 
 from pydantic import BaseModel, Field
 
@@ -18,7 +18,7 @@ class UserMessageCountItem(BaseModel):
     phone_normalized: str | None = None
     org_unit_name: str | None = None
     message_count: int
-    last_message_at: datetime | None = None
+    last_message_at: BeijingDateTime | None = None
     agent_codes: list[str] = Field(default_factory=list)
 
 
@@ -34,8 +34,8 @@ class UserChatDurationItem(BaseModel):
     user_id: str
     user_name: str | None = None
     chat_date: str
-    first_message_at: datetime | None = None
-    last_message_at: datetime | None = None
+    first_message_at: BeijingDateTime | None = None
+    last_message_at: BeijingDateTime | None = None
     duration_seconds: int
     message_count: int
 

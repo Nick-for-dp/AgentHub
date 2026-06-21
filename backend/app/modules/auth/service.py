@@ -352,7 +352,11 @@ class AuthService:
         避免泄漏用户存在性。
         """
         phone_normalized = normalize_phone(payload.phone)
+        # 外部客户优先（业务主路径）；找不到再回退查内部员工，支持管理员等内部账号登录。
+        # 两类用户的手机号空间独立：外部客户手机号有唯一约束，内部员工没有。
         user = self.org_repository.get_active_external_user_by_phone(phone_normalized)
+        if user is None:
+            user = self.org_repository.get_active_internal_user_by_phone(phone_normalized)
         if user is None:
             raise UnauthorizedError("手机号或密码错误")
         if not user.password_hash:

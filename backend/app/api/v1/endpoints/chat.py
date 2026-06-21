@@ -131,7 +131,10 @@ async def chat(
         base_runtime_snapshot = {"runtime_type": agent.runtime_type, "runtime_app_id": agent.runtime_app_id}
 
         def _build_finish(**overrides) -> InvocationRecordFinish:
-            """构造 InvocationRecordFinish，自动映射 Dify metadata 到审计字段。"""
+            """构造 InvocationRecordFinish，自动映射 Dify metadata 到审计字段。
+
+            快照统一收敛到单个 snapshot 字段，内部保留 retrieval / model / runtime 三个子键。
+            """
             runtime_snapshot = dict(base_runtime_snapshot)
             if node_trace:
                 runtime_snapshot["node_trace"] = node_trace
@@ -141,6 +144,12 @@ async def chat(
                 runtime_snapshot["dify_final_output"] = normalized_output.to_public_dict()
             if lead_capture_result is not None:
                 runtime_snapshot["lead_capture_result"] = lead_capture_result
+            retrieval_snapshot = {"resources": last_metadata.get("retriever_resources", [])}
+            model_snapshot = (
+                {"model_provider": last_metadata.get("model_provider"),
+                 "model_name": last_metadata.get("model_name")}
+                if any(k in last_metadata for k in ("model_provider", "model_name")) else {}
+            )
             return InvocationRecordFinish(
                 output=(
                     {"answer": normalized_output.text, **normalized_output.to_public_dict()}
@@ -148,11 +157,11 @@ async def chat(
                     else {"answer": "".join(output_parts)}
                 ),
                 token_usage=last_metadata.get("usage", {}),
-                retrieval_snapshot={"resources": last_metadata.get("retriever_resources", [])},
-                model_snapshot={"model_provider": last_metadata.get("model_provider"),
-                                "model_name": last_metadata.get("model_name")}
-                if any(k in last_metadata for k in ("model_provider", "model_name")) else {},
-                runtime_snapshot=runtime_snapshot,
+                snapshot={
+                    "retrieval": retrieval_snapshot,
+                    "model": model_snapshot,
+                    "runtime": runtime_snapshot,
+                },
                 **overrides,
             )
 

@@ -1,4 +1,4 @@
-from datetime import datetime
+from app.core.datetime import BeijingDateTime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,8 +27,8 @@ class KnowledgeBaseRead(BaseModel):
     retrieval_config: dict[str, Any]
     status: ResourceStatus
     created_by: str | None
-    created_at: datetime
-    updated_at: datetime
+    created_at: BeijingDateTime
+    updated_at: BeijingDateTime
 
 
 class DocumentCreate(BaseModel):
@@ -61,5 +61,5 @@ class DocumentRead(BaseModel):
     chunk_version: str | None
     failed_reason: str | None
     created_by: str | None
-    created_at: datetime
-    updated_at: datetime
+    created_at: BeijingDateTime
+    updated_at: BeijingDateTime

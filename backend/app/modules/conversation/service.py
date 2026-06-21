@@ -149,19 +149,26 @@ class ConversationService:
         conversation_id: str | None,
         first_question: str,
     ) -> Conversation:
-        """确保存在可用会话。传入 conversation_id 时直接恢复；否则取最新 ACTIVE，没有则新建。"""
+        """确保存在可用会话。传入 conversation_id 时直接恢复；否则取最新 ACTIVE，没有则新建。
+
+        传入的 conversation_id 在库中不存在时（如客户端 URL 残留了已删除或重建库前的旧 ID），
+        不抛 404 阻断聊天，而是静默回退到“取当前 ACTIVE / 新建”。
+        但归属校验仍然生效：会话属于其他用户或其他 Agent 时必须拒绝，不能借回退绕过越权。
+        """
         if conversation_id:
-            conversation = self.get_user_conversation(
-                conversation_id=conversation_id,
-                user_id=user_id,
-                agent_id=agent.id,
-            )
-            if conversation.status == ConversationStatus.ARCHIVED:
-                conversation.status = ConversationStatus.ACTIVE
-                self.repository.save_conversation(conversation)
-                self.db.commit()
-                self.db.refresh(conversation)
-            return conversation
+            existing = self.repository.get_conversation(conversation_id)
+            # 不存在或已删除：视为无效 ID，丢弃后走下方“当前/新建”回退逻辑
+            if existing is not None and existing.status != ConversationStatus.DELETED:
+                if existing.user_id != user_id:
+                    raise NotFoundError("conversation not found")
+                if existing.agent_id != agent.id:
+                    raise ForbiddenError("conversation does not belong to this agent")
+                if existing.status == ConversationStatus.ARCHIVED:
+                    existing.status = ConversationStatus.ACTIVE
+                    self.repository.save_conversation(existing)
+                    self.db.commit()
+                    self.db.refresh(existing)
+                return existing
 
         conversation = self.get_current_conversation(user_id=user_id, agent=agent)
         if conversation is not None:

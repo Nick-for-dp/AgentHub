@@ -50,6 +50,24 @@ class OrgRepository:
         )
         return self.db.scalars(stmt).one_or_none()
 
+    def get_active_internal_user_by_phone(self, phone_normalized: str) -> UserAccount | None:
+        """按手机号查找在职的内部员工。
+
+        内部员工手机号无生成列唯一约束（唯一约束只作用于外部客户），
+        理论上可能重复；这里取最早创建的一条，避免 one_or_none 在重复时报错。
+        内部员工登录依赖此查询，与外部客户登录路径分离。
+        """
+        stmt = (
+            select(UserAccount)
+            .where(
+                UserAccount.user_type == UserType.INTERNAL_EMPLOYEE,
+                UserAccount.status == ResourceStatus.ACTIVE,
+                UserAccount.phone_normalized == phone_normalized,
+            )
+            .order_by(UserAccount.created_at.asc())
+        )
+        return self.db.scalars(stmt).first()
+
     def phone_exists_for_external_user(self, phone_normalized: str) -> bool:
         stmt = select(UserAccount.id).where(
             UserAccount.user_type == UserType.EXTERNAL_CUSTOMER,

@@ -1,4 +1,4 @@
-from datetime import datetime
+from app.core.datetime import BeijingDateTime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -37,9 +37,9 @@ class ConversationRead(BaseModel):
     provider: ProviderType
     provider_conversation_id: str | None
     status: ConversationStatus
-    last_message_at: datetime
-    created_at: datetime
-    updated_at: datetime
+    last_message_at: BeijingDateTime
+    created_at: BeijingDateTime
+    updated_at: BeijingDateTime
 
 
 class ConversationMessageCreate(BaseModel):
@@ -75,8 +75,8 @@ class ConversationMessageRead(BaseModel):
     provider_message_id: str | None
     invocation_record_id: str | None
     status: ConversationMessageStatus
-    created_at: datetime
-    updated_at: datetime
+    created_at: BeijingDateTime
+    updated_at: BeijingDateTime
 
 
 class ConversationWithMessages(BaseModel):

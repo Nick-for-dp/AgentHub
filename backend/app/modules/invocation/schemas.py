@@ -12,6 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.datetime import BeijingDateTime
 from app.core.enums import CallerType, InvocationStatus, OperationType
 
 
@@ -21,7 +22,6 @@ class InvocationRecordCreate(BaseModel):
     此时仅有输入信息，输出/状态/耗时等字段在调用结束后通过 finish 更新。
     """
     request_id: str
-    trace_id: str | None = None
     agent_id: str
     org_unit_id: str | None = None
     user_id: str | None = None
@@ -32,7 +32,6 @@ class InvocationRecordCreate(BaseModel):
     input: dict[str, Any] = Field(default_factory=dict)
     stream_mode: bool = True
     session_id: str | None = None
-    parent_id: str | None = None
 
 
 class InvocationRecordFinish(BaseModel):
@@ -46,9 +45,8 @@ class InvocationRecordFinish(BaseModel):
     error_message: str | None = None
     token_usage: dict[str, Any] = Field(default_factory=dict)
     latency_ms: int | None = None
-    retrieval_snapshot: dict[str, Any] = Field(default_factory=dict)
-    model_snapshot: dict[str, Any] = Field(default_factory=dict)
-    runtime_snapshot: dict[str, Any] = Field(default_factory=dict)
+    # 固定结构 {"retrieval": {...}, "model": {...}, "runtime": {...}}
+    snapshot: dict[str, Any] = Field(default_factory=dict)
 
 
 class InvocationRecordFilter(BaseModel):
@@ -76,7 +74,6 @@ class InvocationRecordRead(BaseModel):
 
     id: str
     request_id: str
-    trace_id: str | None
     agent_id: str
     agent_code: str | None = None
     agent_name: str | None = None
@@ -99,15 +96,10 @@ class InvocationRecordRead(BaseModel):
     error_message: str | None
     token_usage: dict[str, Any]
     latency_ms: int | None
-    retrieval_snapshot: dict[str, Any]
-    model_snapshot: dict[str, Any]
-    runtime_snapshot: dict[str, Any]
+    snapshot: dict[str, Any]
     session_id: str | None
-    parent_id: str | None
-    feedback_score: int | None
-    evaluation_score: float | None
-    created_at: datetime
-    finished_at: datetime | None
+    created_at: BeijingDateTime
+    finished_at: BeijingDateTime | None
 
 
 class InvocationRecordPage(BaseModel):

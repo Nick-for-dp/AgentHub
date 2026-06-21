@@ -10,7 +10,6 @@ from app.api.v1.endpoints import (
     conversations,
     documents,
     embed,
-    evaluations,
     invocation_records,
     knowledge_bases,
     leads,
@@ -100,11 +99,5 @@ api_router.include_router(
     analytics.router,
     prefix="/admin/analytics",
     tags=["admin-analytics"],
-    dependencies=_admin_deps,
-)
-api_router.include_router(
-    evaluations.router,
-    prefix="/admin/evaluations",
-    tags=["admin-evaluations"],
     dependencies=_admin_deps,
 )

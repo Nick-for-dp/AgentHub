@@ -8,10 +8,12 @@
 用法：cd backend && python scripts/seed.py
 
 环境变量：
-  SEED_DIFY_API_KEY    Agent 级 Dify API Key（可选，未设则用占位符）
   SEED_RUNTIME_APP_ID  Dify App ID（可选，未设则用占位符）
   SEED_PROVIDER_KB_ID  Dify 知识库 ID（可选，未设则用占位符）
   SEED_EXT_PHONE       外部客户手机号（可选，默认 +8613800001234）
+
+Dify API Key 直接复用 .env 中的 DIFY_API_KEY（经 Settings 加载），
+未配置时退回占位符，Agent 元数据可创建但实际调用 Dify 会失败。
 """
 
 import os
@@ -22,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from datetime import datetime, timedelta, timezone
 
+from app.core.config import get_settings
 from app.core.enums import (
     APIKeyOwnerType,
     APIKeyStatus,
@@ -47,15 +50,21 @@ from app.modules.knowledge.service import KnowledgeService
 from app.modules.org.schemas import OrgUnitCreate, UserCreate
 from app.modules.org.service import OrgService
 
-# ── Dify 集成配置（从环境变量读取）──────────────────────────
-# 种子数据中不硬编码任何真实凭据。以下占位符值明显不是有效 Key，
-# 种子执行后 Agent/KB 元数据会创建，但实际调用 Dify 时会因 Key 无效而失败。
-_SEED_DIFY_API_KEY = os.getenv("SEED_DIFY_API_KEY", "seed-placeholder-not-a-real-key")
+# ── Dify 集成配置 ──────────────────────────────────────────────
+# Dify API Key 复用 .env 中的 DIFY_API_KEY（必须经 Settings 读取，os.getenv 不读 .env）。
+# 未配置时使用占位符：Agent/KB 元数据会创建，但实际调用 Dify 时会因 Key 无效而失败。
+_SEED_DIFY_API_KEY = get_settings().dify_api_key or "seed-placeholder-not-a-real-key"
 _SEED_RUNTIME_APP_ID = os.getenv("SEED_RUNTIME_APP_ID", "00000000-0000-0000-0000-000000000000")
 _SEED_PROVIDER_KB_ID = os.getenv("SEED_PROVIDER_KB_ID", "00000000-0000-0000-0000-000000000000")
 _SEED_EXT_PHONE = os.getenv("SEED_EXT_PHONE", "+8613800001234")
 # 仅用于本地演示，生产环境必须通过安全渠道设置密码
 _SEED_EXT_PASSWORD = os.getenv("SEED_EXT_PASSWORD", "Demo8Pass")
+# 内部管理员登录账号（带手机号+密码，可在登录页用账密登录并访问管理端）
+_SEED_ADMIN_PHONE = os.getenv("SEED_ADMIN_PHONE", "+8613900000000")
+_SEED_ADMIN_PASSWORD = os.getenv("SEED_ADMIN_PASSWORD", "Admin8Pass")
+# 第二个外部客户（营销智能体测试用户）
+_SEED_EXT2_PHONE = os.getenv("SEED_EXT2_PHONE", "+8613800005678")
+_SEED_EXT2_PASSWORD = os.getenv("SEED_EXT2_PASSWORD", "Demo8Pass")
 
 
 def seed() -> None:
@@ -93,12 +102,16 @@ def seed() -> None:
     if admin_users:
         admin_user = admin_users[0]
     else:
+        # 管理员是内部员工，带手机号+密码，可在登录页用账密登录并访问管理端。
+        # 内部员工手机号无唯一约束，登录走内部员工回退查询路径。
         admin_user = org_service.create_user(
             UserCreate(
                 org_unit_id=admin_dept.id,
                 name="管理员",
                 user_type=UserType.INTERNAL_EMPLOYEE,
                 email="admin@agenthub.local",
+                phone=_SEED_ADMIN_PHONE,
+                password=_SEED_ADMIN_PASSWORD,
             )
         )
 
@@ -124,6 +137,23 @@ def seed() -> None:
                 user_type=UserType.EXTERNAL_CUSTOMER,
                 phone=_SEED_EXT_PHONE,
                 password=_SEED_EXT_PASSWORD,
+            )
+        )
+
+    # 第二个外部客户（营销智能体测试用户）。放在同一外部客户组织下，
+    # 自动继承组织级 qa Agent invoke 权限策略，可独立登录测试问答。
+    ext2_users = [u for u in org_service.list_users()
+                  if u.user_type == UserType.EXTERNAL_CUSTOMER and u.phone_normalized == _SEED_EXT2_PHONE]
+    if ext2_users:
+        ext2_user = ext2_users[0]
+    else:
+        ext2_user = org_service.create_user(
+            UserCreate(
+                org_unit_id=ext_org.id,
+                name="李四",
+                user_type=UserType.EXTERNAL_CUSTOMER,
+                phone=_SEED_EXT2_PHONE,
+                password=_SEED_EXT2_PASSWORD,
             )
         )
 
@@ -261,6 +291,8 @@ def seed() -> None:
         )
 
     phone = ext_user.phone_normalized
+    ext2_phone = ext2_user.phone_normalized
+    admin_phone = admin_user.phone_normalized
     key_prefix = api_key_record.key_prefix
     agent_code = agent.code
     kb_name = kb.name
@@ -269,16 +301,24 @@ def seed() -> None:
     db.close()
 
     print("种子数据创建完成。")
+    print("— 管理员（登录页账密登录，可访问管理端）—")
+    print(f"  管理员手机:      {admin_phone}")
+    print(f"  管理员密码:      {_SEED_ADMIN_PASSWORD}  (仅本地演示)")
+    if admin_key_raw:
+        print(f"  管理员 API Key (仅此一次): {admin_key_raw}")
+    else:
+        print(f"  管理员 API Key 前缀:    {admin_prefix}...")
+    print("— 外部客户 1（营销智能体测试）—")
     print(f"  外部客户手机:    {phone}")
     print(f"  外部客户密码:    {_SEED_EXT_PASSWORD}  (仅本地演示)")
     if issued_raw_key:
         print(f"  外部客户 API Key (仅此一次): {issued_raw_key}")
     else:
         print(f"  外部客户 API Key 前缀:    {key_prefix}...")
-    if admin_key_raw:
-        print(f"  管理员 API Key (仅此一次): {admin_key_raw}")
-    else:
-        print(f"  管理员 API Key 前缀:    {admin_prefix}...")
+    print("— 外部客户 2（营销智能体测试）—")
+    print(f"  外部客户手机:    {ext2_phone}")
+    print(f"  外部客户密码:    {_SEED_EXT2_PASSWORD}  (仅本地演示)")
+    print("— 其它 —")
     print(f"  Agent code:      {agent_code}")
     print(f"  KB name:         {kb_name}")
 

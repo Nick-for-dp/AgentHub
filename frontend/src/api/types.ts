@@ -159,7 +159,6 @@ export interface APIKeyIssued {
 export interface InvocationRecord {
   id: string
   request_id: string
-  trace_id?: string
   agent_id: string
   agent_code?: string
   agent_name?: string
@@ -182,13 +181,9 @@ export interface InvocationRecord {
   error_message?: string
   token_usage: Record<string, unknown>
   latency_ms?: number
-  retrieval_snapshot: Record<string, unknown>
-  model_snapshot: Record<string, unknown>
-  runtime_snapshot: Record<string, unknown>
+  // 合并后的运行时快照，内部含 retrieval / model / runtime 三个子键
+  snapshot: Record<string, unknown>
   session_id?: string
-  parent_id?: string
-  feedback_score?: number
-  evaluation_score?: number
   created_at: string
   finished_at?: string
 }

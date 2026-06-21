@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.datetime import BeijingDateTime
 from app.core.enums import (
     APIKeyOwnerType,
     APIKeyStatus,
@@ -43,10 +44,10 @@ class APIKeyRead(BaseModel):
     name: str
     scopes: list[str]
     status: APIKeyStatus
-    expires_at: datetime | None
-    last_used_at: datetime | None
-    created_at: datetime
-    updated_at: datetime
+    expires_at: BeijingDateTime | None
+    last_used_at: BeijingDateTime | None
+    created_at: BeijingDateTime
+    updated_at: BeijingDateTime
 
 
 class APIKeyIssued(BaseModel):
@@ -74,8 +75,8 @@ class PermissionPolicyRead(BaseModel):
     actions: list[str]
     effect: PolicyEffect
     status: ResourceStatus
-    created_at: datetime
-    updated_at: datetime
+    created_at: BeijingDateTime
+    updated_at: BeijingDateTime
 
 
 class AuthenticatedSubject(BaseModel):
@@ -108,8 +109,8 @@ class UserSummary(BaseModel):
 
 class SessionResponse(BaseModel):
     user: UserSummary
-    access_expires_at: datetime
-    idle_expires_at: datetime
+    access_expires_at: BeijingDateTime
+    idle_expires_at: BeijingDateTime
     expires_in: int
     idle_expires_in: int
 
@@ -117,8 +118,8 @@ class SessionResponse(BaseModel):
 class SessionStatusResponse(BaseModel):
     authenticated: bool
     user: UserSummary | None = None
-    access_expires_at: datetime | None = None
-    idle_expires_at: datetime | None = None
+    access_expires_at: BeijingDateTime | None = None
+    idle_expires_at: BeijingDateTime | None = None
     expires_in: int = 0
     idle_expires_in: int = 0
 

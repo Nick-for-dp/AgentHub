@@ -1,8 +1,8 @@
-from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
+from app.core.datetime import BeijingDateTime
 from app.core.enums import AgentType, PublishStatus, RuntimeType, Visibility
 from app.core.security import sanitize_dict_for_log
 
@@ -45,8 +45,8 @@ class AgentRead(BaseModel):
     visibility: Visibility
     config_snapshot: dict[str, Any]
     created_by: str | None
-    created_at: datetime
-    updated_at: datetime
+    created_at: BeijingDateTime
+    updated_at: BeijingDateTime
 
     @field_serializer("config_snapshot")
     @classmethod
@@ -75,4 +75,4 @@ class AgentKnowledgeBaseRead(BaseModel):
     knowledge_base_id: str
     priority: int
     status: str
-    created_at: datetime
+    created_at: BeijingDateTime
