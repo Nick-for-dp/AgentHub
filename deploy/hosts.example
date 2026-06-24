@@ -1,0 +1,29 @@
+# AgentHub 内网 hosts 别名
+#
+# 用途：在没有内网 DNS 的阶段，用 /etc/hosts 给关键内网服务起一个稳定别名。
+# 一旦机器搬迁或扩容只换 IP，应用配置、Nginx server_name、Dify 回调、文档全不动。
+#
+# 部署位置：每台需要访问 AgentHub / MySQL / Dify 的内网机器（包括 AgentHub 应用机自身）：
+#   sudo tee -a /etc/hosts <<'EOF'
+#   10.128.140.208  agenthub.intra
+#   10.128.140.211  mysql.intra
+#   10.128.140.209  dify.intra
+#   EOF
+#
+# 验证：
+#   ping -c 1 agenthub.intra
+#   getent hosts mysql.intra
+#
+# 注意：
+#   - /etc/hosts 不能写端口；端口写在 DATABASE_URL / DIFY_BASE_URL 里。
+#   - Windows 客户端的对应文件：C:\Windows\System32\drivers\etc\hosts（需管理员）。
+#   - 如果公司已有内网 DNS，把这三条录入 DNS 即可，每台机器不必各写一遍。
+
+# AgentHub 应用机（FastAPI + Nginx）
+10.128.140.208  agenthub.intra
+
+# MySQL 8 数据库机
+10.128.140.211  mysql.intra
+
+# Dify runtime（已就绪，Docker 部署在 8200 端口）
+10.128.140.209  dify.intra

@@ -1,0 +1,52 @@
+# AgentHub 日志轮转配置
+#
+# 部署位置：/etc/logrotate.d/agenthub
+# 验证语法：sudo logrotate -d /etc/logrotate.d/agenthub   # debug 模式，不真改
+# 强制执行（首次部署可手动跑一次）：sudo logrotate -f /etc/logrotate.d/agenthub
+#
+# 设计说明：
+#   1. Nginx 访问/错误日志按天切割、保留 14 天、压缩历史。
+#   2. 后端 systemd 日志由 journald 自己管理（见 /etc/systemd/journald.conf），
+#      不需要 logrotate；这里只是兜底，万一你把后端日志重定向到文件，可参照下方块。
+#   3. postrotate 段给 Nginx 发 USR1 让它重新打开日志文件句柄，
+#      否则 nginx 会继续写到已经被改名的旧文件，新文件空着。
+#
+# 注意：logrotate 的执行依赖 cron（/etc/cron.daily/logrotate）。
+# 在 Ubuntu 22.04 上默认每天 06:25 跑一次，不需要额外配置。
+
+# ─────────────────────────────────────────────
+# Nginx 日志（与 deploy/nginx/agenthub.conf 的 access_log/error_log 一致）
+# ─────────────────────────────────────────────
+/var/log/nginx/agenthub.access.log
+/var/log/nginx/agenthub.error.log
+{
+    daily                 # 按天切割
+    missingok             # 文件不存在不报错（首次部署还没生成日志时）
+    rotate 14             # 保留 14 份历史
+    compress              # 旧日志 gzip 压缩
+    delaycompress         # 上一份不压，避免还在写时压坏
+    notifempty            # 空文件不切（避免一堆 0 字节 .gz）
+    create 0640 www-data adm  # 切完新建的空文件权限
+    sharedscripts         # 多个文件共用一次 postrotate
+    postrotate
+        # 让 nginx 重新打开日志文件句柄；不需要 reload，比 reload 更轻
+        [ -f /var/run/nginx.pid ] && kill -USR1 `cat /var/run/nginx.pid`
+    endscript
+}
+
+# ─────────────────────────────────────────────
+# AgentHub 后端日志（如果你把 uvicorn stdout 重定向到了 /var/log/agenthub/）
+# ─────────────────────────────────────────────
+# 默认 systemd unit 走 journald，不需要这一块。
+# 如果你出于审计需要把日志也落了文件，再取消注释。
+#
+# /var/log/agenthub/backend.log {
+#     daily
+#     missingok
+#     rotate 30
+#     compress
+#     delaycompress
+#     notifempty
+#     create 0640 agenthub agenthub
+#     copytruncate          # 进程持续写时，先复制再清空，避免重启进程
+# }

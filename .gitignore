@@ -22,6 +22,8 @@ tokens.*
 *.csr
 *.jks
 *.keystore
+# MySQL client config 可能包含口令（deploy/backup/.my.cnf 等），永远不入库
+**/.my.cnf
 
 # Python caches, virtualenvs, and build output
 __pycache__/
@@ -114,3 +116,12 @@ CHANGELOG.md
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Editor swap / backup / merge leftovers
+# vim 编辑 .env 崩溃后会留下 .env.swp；这一段挡住所有此类副作用文件
+*.bak
+*.orig
+*.rej
+*.swp
+*.swo
+*~

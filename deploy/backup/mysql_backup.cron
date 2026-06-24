@@ -1,0 +1,24 @@
+# AgentHub MySQL 备份 cron 任务
+#
+# 部署方式（推荐）：
+#   sudo cp deploy/backup/mysql_backup.cron /etc/cron.d/agenthub-mysql-backup
+#   sudo chmod 644 /etc/cron.d/agenthub-mysql-backup
+#   sudo systemctl restart cron
+#
+# 验证：
+#   sudo grep CRON /var/log/syslog | tail
+#   tail -f /var/log/agenthub/mysql_backup.log
+#
+# 字段：分 时 日 月 周  用户  命令
+# 时区：cron 走系统时区（部署机建议 Asia/Shanghai；用 `timedatectl set-timezone Asia/Shanghai` 设置）。
+#
+# 调度策略：每天凌晨 03:17 跑一次；
+#   - 选 03 点：业务低峰，备份对生产 MySQL 影响最小
+#   - 选 :17 分而非 :00：避开整点其他系统任务的并发抢占
+#   - 频率：每日一次。后续如有更细 RPO 要求，再补 binlog 增量。
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+MAILTO=""
+
+17 3 * * *  agenthub  /opt/agenthub/deploy/backup/mysql_backup.sh >> /var/log/agenthub/mysql_backup.log 2>&1
