@@ -25,6 +25,11 @@ Documentation=https://github.com/wukehan/AgentHub
 # 因此不依赖本机 mysql.service；如改为 MySQL 同机部署，加回 After=mysql.service。
 After=network-online.target
 Wants=network-online.target
+# 失败重启上限：30 秒窗口内失败 5 次后暂停，防止死循环烧 CPU。
+# 注意：systemd 220+ 起 StartLimitIntervalSec/StartLimitBurst 必须放在 [Unit]，
+# 写在 [Service] 会被忽略并报 "Unknown key name" 警告。
+StartLimitIntervalSec=30
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -47,11 +52,10 @@ ExecStart=/usr/local/bin/uv run uvicorn app.main:app \
 KillSignal=SIGTERM
 TimeoutStopSec=30
 
-# 失败重启策略：30 秒窗口内失败 5 次后暂停，防止死循环烧 CPU。
+# 失败重启策略：失败后 5 秒后自动重启。
+# StartLimitIntervalSec / StartLimitBurst 上限保护放在 [Unit] 段（systemd 220+ 要求）。
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=30
-StartLimitBurst=5
 
 # SSE 长连接需要更多文件描述符。
 LimitNOFILE=65536
