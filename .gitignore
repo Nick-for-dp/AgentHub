@@ -107,6 +107,7 @@ Archi.md
 DECISIONS.md
 CHANGELOG.md
 .claude/
+*.txt
 
 # IDE, OS, and local workspace files
 .idea/

@@ -314,6 +314,7 @@ import { useCloudSpeechRecognition } from '../../composables/useCloudSpeechRecog
 import { useCloudSpeechSynthesis } from '../../composables/useCloudSpeechSynthesis'
 import { exchangeEmbedToken, getEmbedSession, logoutEmbedSession } from '../../api/embed'
 import { setEmbedSessionActive } from '../../utils/embedAuth'
+import { randomUUID } from '../../utils/uuid'
 
 // 配置 marked
 marked.setOptions({ breaks: true, gfm: true })
@@ -1112,7 +1113,7 @@ function postEmbedMessage(type: string, payload: Record<string, unknown> = {}): 
 }
 
 function requestEmbedToken(reason: 'initial' | 'renew' | 'unauthorized'): void {
-  const requestId = crypto.randomUUID()
+  const requestId = randomUUID()
   pendingEmbedTokenRequestId = requestId
   postEmbedMessage('AGENTHUB_TOKEN_REQUIRED', {
     request_id: requestId,
@@ -1262,7 +1263,7 @@ async function send() {
   }
 
   const userMsg: Message = {
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     role: 'user',
     content: current,
     thought: '',
@@ -1272,7 +1273,7 @@ async function send() {
     isStreaming: false,
   }
   const assistantMsg: Message = {
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     role: 'assistant',
     content: '',
     thought: '',
