@@ -49,6 +49,24 @@ class ConflictError(AgentHubError):
         super().__init__("CONFLICT", message, status.HTTP_409_CONFLICT)
 
 
+class BadRequestError(AgentHubError):
+    """请求参数不符合业务约束：用于 Pydantic 字段校验之外的业务参数错误。"""
+    def __init__(self, message: str = "bad request"):
+        super().__init__("BAD_REQUEST", message, status.HTTP_400_BAD_REQUEST)
+
+
+class FeatureNotImplementedError(AgentHubError):
+    """能力尚未完成：用于已注册契约但还未接入完整业务实现的 MVP 骨架接口。"""
+    def __init__(self, message: str = "feature not implemented"):
+        super().__init__("FEATURE_NOT_IMPLEMENTED", message, status.HTTP_501_NOT_IMPLEMENTED)
+
+
+class UnsupportedRuntimeError(AgentHubError):
+    """不支持的 Agent runtime：Agent 配置引用了当前平台未注册的运行时类型。"""
+    def __init__(self, message: str = "unsupported agent runtime"):
+        super().__init__("UNSUPPORTED_RUNTIME", message, status.HTTP_400_BAD_REQUEST)
+
+
 class DifyNotConfiguredError(AgentHubError):
     """Dify 集成未配置：DIFY_BASE_URL 或 DIFY_API_KEY 未在环境变量中设置。
 

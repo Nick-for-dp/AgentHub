@@ -54,6 +54,11 @@ mkdir -p "$BACKUP_DIR"
 mkdir -p "$(dirname "$LOG_FILE")"
 chmod 700 "$BACKUP_DIR"
 
+# 切到一个 agenthub 用户必然可读的工作目录，避免脚本被外部以
+# `sudo -u agenthub` 触发时继承到 /root 等不可读目录，导致内部
+# find / 系统 getcwd 报 "Failed to restore initial working directory"。
+cd "$BACKUP_DIR"
+
 timestamp="$(date +%Y%m%d_%H%M%S)"
 out_file="$BACKUP_DIR/${DB_NAME}_${timestamp}.sql.gz"
 

@@ -1,6 +1,11 @@
 from enum import StrEnum
 
 
+class DeploymentProfile(StrEnum):
+    EXTERNAL = "external"
+    INTERNAL = "internal"
+
+
 class ResourceStatus(StrEnum):
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
@@ -89,6 +94,22 @@ class ParseStatus(StrEnum):
     PROCESSING = "PROCESSING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+
+
+class FileParseTaskStatus(StrEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class ContractReviewTaskStatus(StrEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class InvocationStatus(StrEnum):

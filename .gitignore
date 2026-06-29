@@ -40,12 +40,8 @@ dist/
 *.egg-info/
 .eggs/
 
-# Python test code and test artifacts
+# Python test artifacts
 backend/app/tests/
-backend/tests/
-tests/
-test_*.py
-*_test.py
 .pytest_cache/
 .coverage
 .coverage.*
@@ -102,12 +98,14 @@ docs/
 CLAUDE.md
 Agent.md
 PLAN.md
+PLAN-*.md
 REVIEW.md
 Archi.md
 DECISIONS.md
 CHANGELOG.md
 .claude/
 *.txt
+deploy/dify工作流提示词集合*
 
 # IDE, OS, and local workspace files
 .idea/

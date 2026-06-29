@@ -3,6 +3,8 @@ from functools import lru_cache
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.enums import DeploymentProfile
+
 
 DEV_EMBED_EXTERNAL_TOKEN_SECRET = "dev-industrial-embed-token-secret-change-me"
 DEV_API_KEY_SIGNING_SECRET = "dev-only-change-me-please"
@@ -25,6 +27,7 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     environment: str = "local"
     debug: bool = False
+    deployment_profile: DeploymentProfile = DeploymentProfile.EXTERNAL
     api_v1_prefix: str = "/api/v1"
     server_host: str = "0.0.0.0"
     server_port: int = 8240
@@ -46,6 +49,8 @@ class Settings(BaseSettings):
     session_id_bytes: int = 32
     refresh_token_expire_days: int = 7
     conversation_inactive_hours: int = 24
+    # 普通 API CORS 与 iframe parent origin 是两套安全边界，不能复用配置。
+    cors_allowed_origins: str | None = None
     # 官网嵌入配置
     embed_enabled: bool = True
     embed_external_token_secret: str = Field(default=DEV_EMBED_EXTERNAL_TOKEN_SECRET, min_length=16)
@@ -62,6 +67,14 @@ class Settings(BaseSettings):
     # Dify 集成配置
     dify_base_url: str | None = None
     dify_api_key: str | None = None
+    # MinIO / S3 兼容对象存储配置
+    object_storage_endpoint: str | None = None
+    object_storage_access_key: str | None = None
+    object_storage_secret_key: str | None = None
+    object_storage_region: str = "us-east-1"
+    object_storage_bucket_raw: str = "int-agenthub-raw"
+    object_storage_bucket_parsed: str = "int-agenthub-parsed"
+    object_storage_presign_expires_seconds: int = 900
     # 火山引擎语音配置（新版控制台，使用 X-Api-Key）
     volc_audio_api_key: str | None = None
     volc_asr_ws_url: str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream"
@@ -90,6 +103,21 @@ class Settings(BaseSettings):
         return [
             origin.strip()
             for origin in self.embed_allowed_parent_origins.split(",")
+            if origin.strip()
+        ]
+
+    @property
+    def cors_allowed_origin_list(self) -> list[str]:
+        """解析普通 API CORS origin 白名单。
+
+        该配置只用于浏览器跨域 API 访问，不控制 iframe 是否允许被父页面嵌入。
+        iframe 的父页面白名单必须继续使用 ``EMBED_ALLOWED_PARENT_ORIGINS``。
+        """
+        if not self.cors_allowed_origins:
+            return []
+        return [
+            origin.strip()
+            for origin in self.cors_allowed_origins.split(",")
             if origin.strip()
         ]
 

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1.router import api_router
+from app.api.v1.router import create_api_router
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
@@ -10,23 +10,24 @@ from app.core.logging import configure_logging
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level)
-    allowed_origins = settings.embed_allowed_parent_origin_list
+    cors_allowed_origins = settings.cors_allowed_origin_list
+    embed_allowed_parent_origins = settings.embed_allowed_parent_origin_list
 
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
         debug=settings.debug,
     )
-    if allowed_origins:
+    if cors_allowed_origins:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=allowed_origins,
+            allow_origins=cors_allowed_origins,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
         )
     register_exception_handlers(app)
-    app.include_router(api_router, prefix=settings.api_v1_prefix)
+    app.include_router(create_api_router(settings), prefix=settings.api_v1_prefix)
 
     @app.middleware("http")
     async def add_security_headers(request, call_next):
@@ -34,9 +35,9 @@ def create_app() -> FastAPI:
         # frame-ancestors：默认 'none' 拒绝任何 iframe 嵌入；只有显式配置 origin
         # 白名单时才放行对应域名。这样即使误关 EMBED_ENABLED，也不会被任意站点
         # 套进 iframe 做点击劫持（clickjacking）。
-        if allowed_origins:
+        if embed_allowed_parent_origins:
             response.headers["Content-Security-Policy"] = (
-                "frame-ancestors " + " ".join(allowed_origins)
+                "frame-ancestors " + " ".join(embed_allowed_parent_origins)
             )
         else:
             response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
