@@ -4,8 +4,8 @@ from sqlalchemy.orm import Session
 
 from app.core.enums import LeadCaptureEventStatus, LeadStatus
 from app.core.security import normalize_phone
-from app.integrations.dify.output import NormalizedDifyOutput
 from app.modules.agent.models import Agent
+from app.modules.agent.output import NormalizedAgentOutput
 from app.modules.conversation.models import Conversation
 from app.modules.lead.models import LeadCaptureEvent, LeadContact, SalesLead
 from app.modules.lead.repository import LeadRepository
@@ -44,7 +44,7 @@ class LeadService:
     def capture_output(
         self,
         *,
-        output: NormalizedDifyOutput,
+        output: NormalizedAgentOutput,
         context: LeadCaptureContext,
     ) -> LeadCaptureResult:
         result = LeadCaptureResult()
@@ -76,7 +76,7 @@ class LeadService:
         self,
         *,
         raw_delta: dict[str, Any],
-        output: NormalizedDifyOutput,
+        output: NormalizedAgentOutput,
         context: LeadCaptureContext,
     ) -> LeadCaptureEvent:
         try:

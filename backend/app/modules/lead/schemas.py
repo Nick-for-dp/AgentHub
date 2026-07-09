@@ -3,8 +3,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.integrations.dify.output import NormalizedDifyOutput
 from app.modules.agent.models import Agent
+from app.modules.agent.output import NormalizedAgentOutput
 from app.modules.conversation.models import Conversation, ConversationMessage
 
 
@@ -66,7 +66,7 @@ class LeadCaptureResult(BaseModel):
 
 
 class LeadOutputCapture(BaseModel):
-    output: NormalizedDifyOutput
+    output: NormalizedAgentOutput
     context: LeadCaptureContext
 
 

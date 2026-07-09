@@ -20,7 +20,11 @@ from app.core.enums import RuntimeType
 from app.core.exceptions import UnsupportedRuntimeError
 from app.core.security import SENSITIVE_CONFIG_KEYS
 from app.integrations.dify.client import DifyClient
-from app.integrations.dify.schemas import DifyChatRequest
+from app.integrations.dify.schemas import (
+    DifyChatRequest,
+    DifyWorkflowRunRequest,
+    DifyWorkflowRunResult,
+)
 from app.modules.agent.models import Agent
 
 logger = logging.getLogger(__name__)
@@ -113,6 +117,23 @@ class DifyRuntime:
             AgentRuntimeChunk: 含增量 answer 和/或 thought 的结构化事件。
         """
         return self._stream_chat(agent, request)
+
+    async def run_workflow(
+        self,
+        agent: Agent,
+        inputs: dict[str, Any],
+        caller_id: str,
+    ) -> DifyWorkflowRunResult:
+        """阻塞式调用 Dify workflow。
+
+        合同审查、报告抽取等结构化任务使用该入口。业务层仍然只依赖
+        ``AgentRuntimeService``，不直接调用 Dify HTTP client。
+        """
+        return await self.dify_client.run_workflow(
+            agent.runtime_app_id or agent.code,
+            DifyWorkflowRunRequest(inputs=inputs, user=caller_id),
+            api_key=_extract_dify_api_key(agent),
+        )
 
     async def _stream_chat(
         self,
@@ -271,6 +292,29 @@ class AgentRuntimeService:
         )
         async for chunk in self._select_runtime(agent).stream_chat(agent, request):
             yield chunk
+
+    async def run_workflow(
+        self,
+        agent: Agent,
+        *,
+        inputs: dict[str, Any],
+        caller_id: str,
+    ) -> DifyWorkflowRunResult:
+        """阻塞式执行结构化 workflow。
+
+        Args:
+            agent: 平台 Agent 记录。
+            inputs: 已由业务模块构造好的 workflow 业务输入。
+            caller_id: provider 侧 user 字段，用于调用追踪。
+
+        Returns:
+            DifyWorkflowRunResult: 归一化后的 Dify blocking workflow 响应。
+        """
+        runtime = self._select_runtime(agent)
+        run_workflow = getattr(runtime, "run_workflow", None)
+        if run_workflow is None:
+            raise UnsupportedRuntimeError("selected runtime does not support workflow run")
+        return await run_workflow(agent, inputs, caller_id)
 
 
 def _extract_dify_api_key(agent: Agent) -> str | None:

@@ -1,0 +1,53 @@
+schema: spec-driven
+
+# 项目上下文：创建 proposal / design / tasks 等 artifact 时由 AI 读取。
+# 这里只放指针与红线摘要，事实以仓库内文档为准，避免重复维护。
+context: |
+  AgentHub 是 RAG 驱动的智能体应用平台，通过 deploy profile（external/internal）区分
+  外部客户问答 Agent 与内部 Agent（合同审查、风控助手等），两套部署共享同一份代码仓库，
+  在网络、数据库、Dify 凭证、对象存储四层面物理隔离。Dify 只是可替换的 runtime/provider。
+
+  技术栈：后端 Python + FastAPI + SQLAlchemy + Alembic + MySQL 8；前端 Vue 3 + Vite +
+  Ant Design Vue + Pinia + Vue Router；外部 runtime Dify + RAGFlow + MinIO。
+
+  编码与协作事实以仓库根目录文档为准，创建 artifact 前必须按需读取：
+    - Agent.md       协作规则、架构红线、编码规范、文档维护规则（最高优先）
+    - Archi.md       最新系统架构、关键流程、数据模型边界
+    - PLAN.md        外部客户问答 Agent 主线未完成事项
+    - PLAN-internal.md  内部 Agent（合同审查、风控助手等）未完成事项
+    - DECISIONS.md   重大架构决策记录（ADR）
+    - README.md      启动、目录、常用命令
+    - docs/frontend-design.md  前端设计规范（涉及 UI 时必读）
+    - docs/ui-review-checklist.md  UI 验收清单（前端改造后必查）
+
+  关键红线（详见 Agent.md 第 4、5 节，编写 design/tasks 不得违反）：
+    - 前端、外部客户、业务服务不得直接调用 Dify；调用只能出现在
+      backend/app/integrations/dify。
+    - 文件解析底层库调用只允许出现在 backend/app/integrations/file_reader；
+      对象存储调用只允许出现在 backend/app/integrations/object_storage。
+    - 权限默认拒绝；显式 deny 优先于 allow。
+    - 每次真正触发 Agent runtime / Dify workflow 的调用必须创建/更新一条
+      agent_invocation_record；调用记录快照内部使用 retrieval / model / runtime 子键。
+    - 内部 profile 与外部 profile 物理隔离；/api/v1/internal/* 路由仅在
+      DEPLOYMENT_PROFILE=internal 下注册。
+    - LLM/Dify/VLM 只负责抽取、分类、结构化转换；敏感条款判定、资信等级适配、
+      交付一致性校验、审批结论必须由 AgentHub 后端规则/计算模块生成。
+    - 日志不得输出密码、API Key 原文、登录 token、Authorization Header、Dify API Key。
+
+# 各 artifact 的额外规则。
+rules:
+  proposal:
+    - 必须说明本提案对应 PLAN.md / PLAN-internal.md 中的哪一项未完成事项，或是否为新增需求。
+    - 明确 Non-goals，避免一次提案跨越多个 profile 或多个 Agent 类型。
+    - 涉及架构红线的变更必须先在 DECISIONS.md 立项或引用已有 ADR。
+  design:
+    - 必须对照 Archi.md 的模块/数据模型边界，说明改动落在哪个模块分层
+      （endpoint / service / repository / integration client）。
+    - 不得让前端、业务服务直接依赖 Dify 或底层文件解析/对象存储库。
+    - 数据库结构变化必须规划 Alembic migration。
+  tasks:
+    - 任务拆分粒度控制在单次可评审、可回滚范围内，单任务不超过约 2 小时。
+    - 涉及 Agent.md 第 9 节列出的能力（手机号、API Key、密码、权限、Agent 路由、
+      调用记录、embed 安全边界等）必须写出对应的测试任务。
+    - 实现完成后，按 Agent.md 第 10 节把架构事实更新到 Archi.md、变更摘要更新到
+      CHANGELOG.md、重大决策更新到 DECISIONS.md。

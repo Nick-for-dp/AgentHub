@@ -1,9 +1,8 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from time import perf_counter
 from uuid import uuid4
-
-import asyncio
 
 from fastapi import APIRouter, Depends, Header
 from fastapi.responses import StreamingResponse
@@ -17,20 +16,18 @@ from app.core.enums import (
     InvocationStatus,
     ResourceType,
 )
-from app.core.exceptions import DifyIntegrationError, ForbiddenError
+from app.core.exceptions import ForbiddenError
 from app.db.session import get_db
-from app.integrations.dify.output import NormalizedDifyOutput, normalize_dify_final_output
+from app.modules.agent.handlers import ChatContext, get_chat_handler_registry
 from app.modules.agent.runtime import AgentRuntimeService
 from app.modules.agent.service import AgentService
 from app.modules.auth.dependencies import get_current_subject
 from app.modules.auth.schemas import AuthenticatedSubject
 from app.modules.auth.service import AuthService
-from app.modules.conversation.models import Conversation, ConversationMessage
 from app.modules.conversation.schemas import ConversationMessageCreate, ConversationMessageUpdate
 from app.modules.conversation.service import ConversationService
-from app.modules.invocation.schemas import InvocationRecordCreate, InvocationRecordFinish
+from app.modules.invocation.schemas import InvocationRecordCreate
 from app.modules.invocation.service import InvocationService
-from app.modules.lead.schemas import LeadCaptureContext
 from app.modules.lead.service import LeadService
 
 router = APIRouter()
@@ -50,6 +47,12 @@ async def chat(
     subject: AuthenticatedSubject = Depends(get_current_subject),
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
+    """对话流入口。
+
+    endpoint 只做四件事：鉴权 → 取 Agent → 选 handler → 写调用记录与产品会话。
+    流式消费、Dify 归一化、线索收集等逻辑由 handler 承载，endpoint 不感知
+    runtime provider 专有类型。
+    """
     request_id = x_request_id or str(uuid4())
     agent_service = AgentService(db)
     auth_service = AuthService(db)
@@ -63,8 +66,13 @@ async def chat(
             raise ForbiddenError("embed session cannot access this agent")
     else:
         auth_service.assert_allowed(subject, ResourceType.AGENT, agent.id, "invoke")
-    platform_conversation: Conversation | None = None
-    assistant_message: ConversationMessage | None = None
+
+    # 选 handler：按 agent.type 分发，未注册类型返回明确错误
+    handler = get_chat_handler_registry().select(agent)
+    handler.set_base_runtime_snapshot(agent)
+
+    platform_conversation = None
+    assistant_message = None
     provider_conversation_id = payload.conversation_id
     is_user_chat = subject.caller_type == CallerType.USER and subject.user_id is not None
 
@@ -115,192 +123,107 @@ async def chat(
             )
         )
 
+    ctx = ChatContext(
+        agent=agent,
+        subject=subject,
+        question=payload.question,
+        provider_conversation_id=provider_conversation_id,
+        platform_conversation=platform_conversation,
+        assistant_message=assistant_message,
+        known_lead_state=known_lead_state,
+        runtime_service=AgentRuntimeService(),
+        conversation_service=conversation_service,
+        invocation_record_id=record.id,
+    )
+
     async def event_stream() -> AsyncIterator[str]:
-        nonlocal provider_conversation_id
         started_at = perf_counter()
-        output_parts: list[str] = []
-        thought_parts: list[str] = []
-        # 从 Dify message_end 事件中收集的 metadata，用于填充调用记录的审计字段
-        last_metadata: dict = {}
-        # workflow 节点事件轨迹，记录每个节点的开始/结束/状态/耗时
-        node_trace: list[dict] = []
-        provider_message_id: str | None = None
-        final_workflow_outputs: dict | None = None
-        normalized_output: NormalizedDifyOutput | None = None
-        lead_capture_result: dict | None = None
-        base_runtime_snapshot = {"runtime_type": agent.runtime_type, "runtime_app_id": agent.runtime_app_id}
 
-        def _build_finish(**overrides) -> InvocationRecordFinish:
-            """构造 InvocationRecordFinish，自动映射 Dify metadata 到审计字段。
+        def _latency_ms() -> int:
+            return int((perf_counter() - started_at) * 1000)
 
-            快照统一收敛到单个 snapshot 字段，内部保留 retrieval / model / runtime 三个子键。
-            """
-            runtime_snapshot = dict(base_runtime_snapshot)
-            if node_trace:
-                runtime_snapshot["node_trace"] = node_trace
-            if last_metadata:
-                runtime_snapshot["dify_metadata"] = last_metadata
-            if normalized_output is not None:
-                runtime_snapshot["dify_final_output"] = normalized_output.to_public_dict()
-            if lead_capture_result is not None:
-                runtime_snapshot["lead_capture_result"] = lead_capture_result
-            retrieval_snapshot = {"resources": last_metadata.get("retriever_resources", [])}
-            model_snapshot = (
-                {"model_provider": last_metadata.get("model_provider"),
-                 "model_name": last_metadata.get("model_name")}
-                if any(k in last_metadata for k in ("model_provider", "model_name")) else {}
-            )
-            return InvocationRecordFinish(
-                output=(
-                    {"answer": normalized_output.text, **normalized_output.to_public_dict()}
-                    if normalized_output is not None
-                    else {"answer": "".join(output_parts)}
-                ),
-                token_usage=last_metadata.get("usage", {}),
-                snapshot={
-                    "retrieval": retrieval_snapshot,
-                    "model": model_snapshot,
-                    "runtime": runtime_snapshot,
-                },
-                **overrides,
-            )
+        def _finish_message(status: ConversationMessageStatus) -> None:
+            """更新 assistant 消息最终状态（仅登录用户有产品会话时）。"""
+            if assistant_message is not None:
+                finish = handler.build_finish(status=InvocationStatus.SUCCEEDED.name)
+                conversation_service.update_message(
+                    assistant_message,
+                    ConversationMessageUpdate(
+                        content=finish.output.get("answer", ""),
+                        thought=None,
+                        steps=[],
+                        provider_message_id=handler._provider_message_id,
+                        invocation_record_id=record.id,
+                        status=status,
+                    ),
+                )
 
         try:
             if platform_conversation is not None:
                 yield f"data: {json.dumps({'conversation_id': platform_conversation.id}, ensure_ascii=False)}\n\n"
-            async for chunk in AgentRuntimeService().stream_chat(
-                agent=agent,
-                question=payload.question,
-                caller_id=subject.user_id or subject.api_key_id or "anonymous",
-                conversation_id=provider_conversation_id,
-                extra_inputs={"known_lead_state": known_lead_state},
-            ):
-                if chunk.metadata:
-                    last_metadata = chunk.metadata
-                if chunk.workflow_outputs:
-                    final_workflow_outputs = chunk.workflow_outputs
-                # 累加工作流节点轨迹（用于审计快照）
-                if chunk.node:
-                    node_trace.append(chunk.node)
-                event_data: dict = {}
-                if chunk.answer:
-                    output_parts.append(chunk.answer)
-                    event_data["answer"] = chunk.answer
-                if chunk.thought:
-                    thought_parts.append(chunk.thought)
-                    event_data["thought"] = chunk.thought
-                if chunk.conversation_id and platform_conversation is None:
-                    event_data["conversation_id"] = chunk.conversation_id
-                if chunk.conversation_id and platform_conversation is not None:
-                    provider_conversation_id = chunk.conversation_id
-                    conversation_service.update_provider_conversation_id(
-                        platform_conversation,
-                        chunk.conversation_id,
-                        commit=False,
-                    )
-                    event_data["provider_conversation_id"] = chunk.conversation_id
-                if chunk.message_id:
-                    provider_message_id = chunk.message_id
-                    event_data["message_id"] = chunk.message_id
-                if chunk.node:
-                    event_data["event"] = chunk.node.get("event")
-                    event_data["node"] = {k: v for k, v in chunk.node.items() if k != "event"}
-                if chunk.error:
-                    raise DifyIntegrationError(chunk.error)
-                if assistant_message is not None and (
-                    chunk.answer or chunk.thought or chunk.node or chunk.message_id
-                ):
-                    conversation_service.update_message(
-                        assistant_message,
-                        ConversationMessageUpdate(
-                            content="".join(output_parts),
-                            thought="".join(thought_parts) or None,
-                            steps=node_trace,
-                            provider_message_id=provider_message_id,
-                            status=ConversationMessageStatus.STREAMING,
-                        ),
-                    )
-                if event_data:
-                    yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
-            normalized_output = normalize_dify_final_output(
-                final_workflow_outputs if final_workflow_outputs is not None else {"text": "".join(output_parts)}
+            async for event_data in handler.stream(ctx):
+                yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+
+            # 流正常结束：归一化输出 + 运行后处理器
+            handler.on_complete(ctx, lead_service)
+
+            finish = handler.build_finish(
+                status=InvocationStatus.SUCCEEDED,
+                latency_ms=_latency_ms(),
             )
-            if output_parts and "".join(output_parts) != normalized_output.text:
-                output_parts[:] = [normalized_output.text]
-            if normalized_output.lead_deltas:
-                lead_capture = lead_service.capture_output(
-                    output=normalized_output,
-                    context=LeadCaptureContext.from_chat(
-                        agent=agent,
-                        user_id=subject.user_id,
-                        org_unit_id=subject.org_unit_id,
-                        conversation=platform_conversation,
-                        assistant_message=assistant_message,
-                        invocation_record_id=record.id,
-                    ),
-                )
-                lead_capture_result = lead_capture.model_dump()
-            latency_ms = int((perf_counter() - started_at) * 1000)
-            invocation_service.finish_record(
-                record.id,
-                _build_finish(status=InvocationStatus.SUCCEEDED, latency_ms=latency_ms),
-            )
+            invocation_service.finish_record(record.id, finish)
             if assistant_message is not None:
                 conversation_service.update_message(
                     assistant_message,
                     ConversationMessageUpdate(
-                        content="".join(output_parts),
-                        thought="".join(thought_parts) or None,
-                        steps=node_trace,
-                        provider_message_id=provider_message_id,
+                        content=finish.output.get("answer", ""),
+                        thought="".join(handler._thought_parts) or None,
+                        steps=handler._node_trace,
+                        provider_message_id=handler._provider_message_id,
                         invocation_record_id=record.id,
                         status=ConversationMessageStatus.COMPLETED,
                     ),
                 )
             yield f"data: {json.dumps({'event': 'done'}, ensure_ascii=False)}\n\n"
+
         except asyncio.CancelledError:
-            latency_ms = int((perf_counter() - started_at) * 1000)
-            invocation_service.finish_record(
-                record.id,
-                _build_finish(
-                    status=InvocationStatus.FAILED,
-                    error_code="CLIENT_DISCONNECTED",
-                    error_message="客户端主动断开连接",
-                    latency_ms=latency_ms,
-                ),
+            finish = handler.build_finish(
+                status=InvocationStatus.FAILED,
+                error_code="CLIENT_DISCONNECTED",
+                error_message="客户端主动断开连接",
+                latency_ms=_latency_ms(),
             )
+            invocation_service.finish_record(record.id, finish)
             if assistant_message is not None:
                 conversation_service.update_message(
                     assistant_message,
                     ConversationMessageUpdate(
-                        content="".join(output_parts),
-                        thought="".join(thought_parts) or None,
-                        steps=node_trace,
-                        provider_message_id=provider_message_id,
+                        content="".join(handler._output_parts),
+                        thought="".join(handler._thought_parts) or None,
+                        steps=handler._node_trace,
+                        provider_message_id=handler._provider_message_id,
                         invocation_record_id=record.id,
                         status=ConversationMessageStatus.INTERRUPTED,
                     ),
                 )
             raise
+
         except Exception as exc:
-            latency_ms = int((perf_counter() - started_at) * 1000)
-            invocation_service.finish_record(
-                record.id,
-                _build_finish(
-                    status=InvocationStatus.FAILED,
-                    error_code=exc.__class__.__name__,
-                    error_message=str(exc),
-                    latency_ms=latency_ms,
-                ),
+            finish = handler.build_finish(
+                status=InvocationStatus.FAILED,
+                error_code=exc.__class__.__name__,
+                error_message=str(exc),
+                latency_ms=_latency_ms(),
             )
+            invocation_service.finish_record(record.id, finish)
             if assistant_message is not None:
                 conversation_service.update_message(
                     assistant_message,
                     ConversationMessageUpdate(
-                        content="".join(output_parts),
-                        thought="".join(thought_parts) or None,
-                        steps=node_trace,
-                        provider_message_id=provider_message_id,
+                        content="".join(handler._output_parts),
+                        thought="".join(handler._thought_parts) or None,
+                        steps=handler._node_trace,
+                        provider_message_id=handler._provider_message_id,
                         invocation_record_id=record.id,
                         status=ConversationMessageStatus.FAILED,
                     ),
