@@ -36,6 +36,8 @@ class ContractReviewTask(IDMixin, TimestampMixin, Base):
         ForeignKey("file_parse_task.id"),
         nullable=False,
     )
+    contract_type: Mapped[str] = mapped_column(String(50), nullable=False, default="warehouse")
+    counterparty_level: Mapped[str] = mapped_column(String(16), nullable=False)
     rule_set_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
     callback_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     invocation_record_id: Mapped[str | None] = mapped_column(

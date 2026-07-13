@@ -3,7 +3,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.datetime import BeijingDateTime
-from app.core.enums import ContractReviewTaskStatus
+from app.core.enums import ContractReviewTaskStatus, CounterpartyLevel
 
 
 class ContractReviewTaskCreate(BaseModel):
@@ -19,6 +19,8 @@ class ContractReviewTaskCreate(BaseModel):
 
     agent_code: str = Field(default="contract-review", min_length=1, max_length=100)
     file_parse_task_id: str = Field(min_length=1)
+    contract_type: str = Field(default="warehouse", min_length=1, max_length=50)
+    counterparty_level: CounterpartyLevel
     rule_set_version: str | None = Field(default=None, max_length=100)
     callback_metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -36,6 +38,17 @@ class ContractClauseSource(BaseModel):
     text_offset: int | None = None
 
 
+class ContractClauseSourceSpan(BaseModel):
+    """条款在解析文本中的高亮 span。"""
+
+    block_id: str
+    section_id: str | None = None
+    section_title: str | None = None
+    start_offset: int
+    end_offset: int
+    matched_text: str
+
+
 class ContractClauseReviewResult(BaseModel):
     """单条合同条款判敏结果。
 
@@ -46,12 +59,16 @@ class ContractClauseReviewResult(BaseModel):
 
     text: str
     category: str
+    matrix_clause: str | None = None
     source: ContractClauseSource = Field(default_factory=ContractClauseSource)
+    source_block_ids: list[str] = Field(default_factory=list)
+    source_spans: list[ContractClauseSourceSpan] = Field(default_factory=list)
     is_sensitive: bool
     risk_level: str
     matched_rules: list[str] = Field(default_factory=list)
     reason: str
     confidence: float = Field(ge=0, le=1)
+    warnings: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ContractReviewSummary(BaseModel):
@@ -66,6 +83,7 @@ class ContractReviewSummary(BaseModel):
     total_clause_count: int = 0
     sensitive_clause_count: int = 0
     highest_risk_level: str | None = None
+    warning_count: int = 0
 
 
 class ContractReviewResult(BaseModel):
@@ -73,6 +91,7 @@ class ContractReviewResult(BaseModel):
 
     clauses: list[ContractClauseReviewResult] = Field(default_factory=list)
     summary: ContractReviewSummary = Field(default_factory=ContractReviewSummary)
+    warnings: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ContractReviewTaskRead(BaseModel):
@@ -91,6 +110,8 @@ class ContractReviewTaskRead(BaseModel):
     status: ContractReviewTaskStatus
     agent_code: str
     file_parse_task_id: str
+    contract_type: str
+    counterparty_level: CounterpartyLevel
     rule_set_version: str | None = None
     callback_metadata: dict[str, Any] = Field(default_factory=dict)
     invocation_record_id: str | None = None

@@ -28,6 +28,7 @@ AgentHub 是一个 RAG 驱动的智能体应用平台。当前阶段聚焦智能
 - 已支持手机号密码登录、HttpOnly Cookie 会话、聊天页和管理端页面。
 - 已支持产业互联网 iframe 嵌入主线：外部短期 JWT exchange 为 AgentHub `embed_session`，后续 iframe 请求使用 AgentHub 自己的 HttpOnly Cookie。
 - 已支持云端语音识别和语音播报；浏览器录音上传 16k mono WAV，后端对接火山 ASR/TTS。
+- internal profile 已支持合同审查工作台：内部用户可上传 PDF/DOCX、选择合同类型和对手方 A1-A7 资信等级，查看解析文本、规则判敏、warning 与原文 span 高亮。
 
 当前实施细节以 `PLAN.md`、`Archi.md` 为准；这两个文件属于本地协作文档，不作为远程交付物。
 
@@ -71,6 +72,7 @@ uv run pytest
 cd frontend
 npm install
 npm run dev
+npm test
 npm run build
 ```
 
@@ -95,6 +97,25 @@ AgentHub 前端：http://127.0.0.1:3000
 AgentHub 管理后台：http://127.0.0.1:3000/admin
 AgentHub 后端：http://127.0.0.1:8240
 ```
+
+## 内部合同审查工作台
+
+合同审查页面仅用于 internal profile。前端构建配置必须与后端 `DEPLOYMENT_PROFILE` 一致：
+
+```text
+# backend/.env
+DEPLOYMENT_PROFILE=internal
+CORS_ALLOWED_ORIGINS=http://127.0.0.1:3000
+
+# frontend/.env（可从 frontend/.env.example 复制）
+VITE_DEPLOYMENT_PROFILE=internal
+VITE_CONTRACT_REVIEW_EXECUTE_TIMEOUT_MS=600000
+```
+
+启动后，内部登录用户访问 `http://127.0.0.1:3000/internal/contract-review`。页面只调用
+AgentHub internal API；文件本体通过后端签发的一次性 MinIO 预签名 URL 上传，浏览器不会向
+MinIO 发送 AgentHub Cookie、Authorization 或 Dify 凭证。MinIO bucket 需为前端 origin 放行
+`PUT` / `OPTIONS` 和预签名请求要求的 `Content-Type` header，详细部署要求见 `docs/deployment.md`。
 
 ## 产业互联网 iframe 嵌入
 

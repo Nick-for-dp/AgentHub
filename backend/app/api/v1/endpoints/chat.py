@@ -47,11 +47,13 @@ async def chat(
     subject: AuthenticatedSubject = Depends(get_current_subject),
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
-    """对话流入口。
+    """对话流入口（ChatHandler 路径）。
 
-    endpoint 只做四件事：鉴权 → 取 Agent → 选 handler → 写调用记录与产品会话。
-    流式消费、Dify 归一化、线索收集等逻辑由 handler 承载，endpoint 不感知
+    endpoint 只做四件事：鉴权 → 取 Agent → 选 ChatHandler → 写调用记录与产品会话。
+    流式消费、Dify 归一化、线索收集等逻辑由 ChatHandler 承载，endpoint 不感知
     runtime provider 专有类型。
+
+    任务型 Agent（如合同审查）不走本路径，由 internal 任务 API + TaskHandler 流水线执行。
     """
     request_id = x_request_id or str(uuid4())
     agent_service = AgentService(db)
@@ -67,7 +69,7 @@ async def chat(
     else:
         auth_service.assert_allowed(subject, ResourceType.AGENT, agent.id, "invoke")
 
-    # 选 handler：按 agent.type 分发，未注册类型返回明确错误
+    # 选 ChatHandler：按 agent.type 分发对话流处理器，未注册类型返回明确错误
     handler = get_chat_handler_registry().select(agent)
     handler.set_base_runtime_snapshot(agent)
 

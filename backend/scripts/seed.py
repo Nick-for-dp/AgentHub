@@ -11,6 +11,8 @@
   SEED_RUNTIME_APP_ID  Dify App ID（可选，未设则用占位符）
   SEED_PROVIDER_KB_ID  Dify 知识库 ID（可选，未设则用占位符）
   SEED_EXT_PHONE       外部客户手机号（可选，默认 +8613800001234）
+  CONTRACT_REVIEW_DIFY_API_KEY  合同审查正式 workflow API Key
+  CONTRACT_REVIEW_FULL_CONTEXT_DIFY_API_KEY  本地过渡回退 key
 
 Dify API Key 直接复用 .env 中的 DIFY_API_KEY（经 Settings 加载），
 未配置时退回占位符，Agent 元数据可创建但实际调用 Dify 会失败。
@@ -31,6 +33,7 @@ from app.core.enums import (
     AgentType,
     OrgUnitType,
     PolicyEffect,
+    PublishStatus,
     ProviderType,
     ResourceType,
     RuntimeType,
@@ -53,9 +56,20 @@ from app.modules.org.service import OrgService
 # ── Dify 集成配置 ──────────────────────────────────────────────
 # Dify API Key 复用 .env 中的 DIFY_API_KEY（必须经 Settings 读取，os.getenv 不读 .env）。
 # 未配置时使用占位符：Agent/KB 元数据会创建，但实际调用 Dify 时会因 Key 无效而失败。
-_SEED_DIFY_API_KEY = get_settings().dify_api_key or "seed-placeholder-not-a-real-key"
+_SETTINGS = get_settings()
+_SEED_PLACEHOLDER_DIFY_KEY = "seed-placeholder-not-a-real-key"
+_SEED_DIFY_API_KEY = _SETTINGS.dify_api_key or _SEED_PLACEHOLDER_DIFY_KEY
 _SEED_RUNTIME_APP_ID = os.getenv("SEED_RUNTIME_APP_ID", "00000000-0000-0000-0000-000000000000")
 _SEED_PROVIDER_KB_ID = os.getenv("SEED_PROVIDER_KB_ID", "00000000-0000-0000-0000-000000000000")
+_CONTRACT_REVIEW_RUNTIME_APP_ID = os.getenv(
+    "CONTRACT_REVIEW_RUNTIME_APP_ID",
+    "contract-review-full-context",
+)
+_CONTRACT_REVIEW_DIFY_API_KEY = (
+    _SETTINGS.contract_review_dify_api_key
+    or _SETTINGS.contract_review_full_context_dify_api_key
+    or _SEED_PLACEHOLDER_DIFY_KEY
+)
 _SEED_EXT_PHONE = os.getenv("SEED_EXT_PHONE", "+8613800001234")
 # 仅用于本地演示，生产环境必须通过安全渠道设置密码
 _SEED_EXT_PASSWORD = os.getenv("SEED_EXT_PASSWORD", "Demo8Pass")
@@ -227,6 +241,54 @@ def seed() -> None:
             )
         )
 
+    # ── 合同审查 Agent ───────────────────────────────────────
+    contract_review_agents = [
+        a for a in agent_service.list_agents() if a.code == "contract-review"
+    ]
+    if contract_review_agents:
+        contract_review_agent = contract_review_agents[0]
+        contract_review_config = dict(contract_review_agent.config_snapshot or {})
+        contract_review_config.setdefault("input_strategy", "full_context_no_filter")
+        # 不用占位符覆盖已有真实 key；只有明确配置 key 或原本没有 key 时才写入。
+        if (
+            _CONTRACT_REVIEW_DIFY_API_KEY != _SEED_PLACEHOLDER_DIFY_KEY
+            or not contract_review_config.get("dify_api_key")
+        ):
+            contract_review_config["dify_api_key"] = _CONTRACT_REVIEW_DIFY_API_KEY
+        contract_review_agent.name = "合同审查 Agent"
+        contract_review_agent.type = AgentType.CONTRACT_REVIEW
+        contract_review_agent.description = "内部合同审查 MVP：全文上下文条款抽取与后端规则判敏"
+        contract_review_agent.owner_org_unit_id = admin_dept.id
+        contract_review_agent.runtime_type = RuntimeType.DIFY
+        contract_review_agent.runtime_app_id = _CONTRACT_REVIEW_RUNTIME_APP_ID
+        contract_review_agent.publish_status = PublishStatus.PUBLISHED
+        contract_review_agent.visibility = Visibility.INTERNAL
+        contract_review_agent.config_snapshot = contract_review_config
+        db.add(contract_review_agent)
+        db.commit()
+        db.refresh(contract_review_agent)
+    else:
+        contract_review_agent = agent_service.create_agent(
+            AgentCreate(
+                code="contract-review",
+                name="合同审查 Agent",
+                type=AgentType.CONTRACT_REVIEW,
+                description="内部合同审查 MVP：全文上下文条款抽取与后端规则判敏",
+                owner_org_unit_id=admin_dept.id,
+                runtime_type=RuntimeType.DIFY,
+                runtime_app_id=_CONTRACT_REVIEW_RUNTIME_APP_ID,
+                visibility=Visibility.INTERNAL,
+                config_snapshot={
+                    "dify_api_key": _CONTRACT_REVIEW_DIFY_API_KEY,
+                    "input_strategy": "full_context_no_filter",
+                },
+            )
+        )
+        contract_review_agent.publish_status = PublishStatus.PUBLISHED
+        db.add(contract_review_agent)
+        db.commit()
+        db.refresh(contract_review_agent)
+
     # ── 知识库 ──────────────────────────────────────────────
     kbs = [k for k in knowledge_service.list_knowledge_bases() if k.name == "MVP 知识库"]
     if kbs:
@@ -295,6 +357,7 @@ def seed() -> None:
     admin_phone = admin_user.phone_normalized
     key_prefix = api_key_record.key_prefix
     agent_code = agent.code
+    contract_review_agent_code = contract_review_agent.code
     kb_name = kb.name
     admin_prefix = admin_key_record.key_prefix
 
@@ -320,6 +383,13 @@ def seed() -> None:
     print(f"  外部客户密码:    {_SEED_EXT2_PASSWORD}  (仅本地演示)")
     print("— 其它 —")
     print(f"  Agent code:      {agent_code}")
+    print(f"  合同审查 Agent:  {contract_review_agent_code}")
+    if _CONTRACT_REVIEW_DIFY_API_KEY == _SEED_PLACEHOLDER_DIFY_KEY:
+        print("  合同审查 Dify Key: 未配置（调用会失败）")
+    elif not _SETTINGS.contract_review_dify_api_key and _SETTINGS.contract_review_full_context_dify_api_key:
+        print("  合同审查 Dify Key: 使用全文实验 key 过渡回退")
+    else:
+        print("  合同审查 Dify Key: 已写入 Agent 配置快照")
     print(f"  KB name:         {kb_name}")
 
 

@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     # Dify 集成配置
     dify_base_url: str | None = None
     dify_api_key: str | None = None
+    # 合同审查正式 workflow 的 Agent 级 Dify API Key。
+    # 本字段只用于初始化/更新 contract-review Agent 的 config_snapshot，不进入 Dify inputs。
+    contract_review_dify_api_key: str | None = None
+    # 兼容昨天全文实验 workflow 的本地配置；正式配置为空时 seed 可临时回退使用。
+    contract_review_full_context_dify_api_key: str | None = None
+    contract_review_block_loop_dify_api_key: str | None = None
     # MinIO / S3 兼容对象存储配置
     object_storage_endpoint: str | None = None
     object_storage_access_key: str | None = None

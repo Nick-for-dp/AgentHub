@@ -1,15 +1,18 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header
 from sqlalchemy.orm import Session
 
 from app.core.responses import APIResponse, success
 from app.db.session import get_db
+from app.modules.agent.runtime import AgentRuntimeService
+from app.modules.agent.service import AgentService
+from app.modules.agent.task_handlers import TaskContext, get_task_handler_registry
 from app.modules.auth.dependencies import get_current_subject
 from app.modules.auth.schemas import AuthenticatedSubject
-from app.modules.contract_review.handlers import ContractReviewHandler
 from app.modules.contract_review.schemas import (
     ContractReviewTaskCreate,
     ContractReviewTaskRead,
 )
+from app.modules.contract_review.service import ContractReviewService
 
 router = APIRouter()
 
@@ -22,10 +25,11 @@ def create_contract_review_task(
 ) -> APIResponse[ContractReviewTaskRead]:
     """创建合同审查任务。
 
-    当前阶段要求请求引用一个已成功的 ``file_parse_task.id``，并创建待执行的
-    合同审查业务任务。Dify workflow 与规则引擎在后续 worker 阶段接入。
+    认证：``get_current_subject``（主路径 API Key）。
+    授权：API Key 需 scope ``agent:contract_review:invoke`` 或 ``*``。
+    创建只落 PENDING，不触发 runtime / TaskHandler 流水线。
     """
-    result = ContractReviewHandler(db).create_task(payload=payload, subject=subject)
+    result = ContractReviewService(db).create_task(payload=payload, subject=subject)
     return success(ContractReviewTaskRead.model_validate(result))
 
 
@@ -35,12 +39,8 @@ def get_contract_review_task(
     subject: AuthenticatedSubject = Depends(get_current_subject),
     db: Session = Depends(get_db),
 ) -> APIResponse[ContractReviewTaskRead]:
-    """查询合同审查任务状态与结果。
-
-    MVP 阶段返回 ``contract_review_task`` 的业务状态。真正运行 Agent 后，
-    ``invocation_record_id`` 会用于追溯 Dify/LLM 调用记录。
-    """
-    result = ContractReviewHandler(db).get_task(task_id=task_id, subject=subject)
+    """查询合同审查任务状态与结果（校验任务归属）。"""
+    result = ContractReviewService(db).get_task(task_id=task_id, subject=subject)
     return success(ContractReviewTaskRead.model_validate(result))
 
 
@@ -50,10 +50,35 @@ def cancel_contract_review_task(
     subject: AuthenticatedSubject = Depends(get_current_subject),
     db: Session = Depends(get_db),
 ) -> APIResponse[ContractReviewTaskRead]:
-    """取消合同审查任务。
+    """取消 PENDING 合同审查任务（校验归属）。"""
+    result = ContractReviewService(db).cancel_task(task_id=task_id, subject=subject)
+    return success(ContractReviewTaskRead.model_validate(result))
 
-    当前仅允许取消尚未进入 worker 的 ``PENDING`` 任务；已进入最终态的任务不会被
-    重复取消。
+
+@router.post("/tasks/{task_id}/execute", response_model=APIResponse[ContractReviewTaskRead])
+async def execute_contract_review_task(
+    task_id: str,
+    x_request_id: str | None = Header(default=None),
+    subject: AuthenticatedSubject = Depends(get_current_subject),
+    db: Session = Depends(get_db),
+) -> APIResponse[ContractReviewTaskRead]:
+    """执行待处理合同审查任务。
+
+    认证：``get_current_subject``（主路径 API Key）。
+    编排：按 agent.type 选择 TaskHandler，运行 preprocess → core → postprocess。
+    endpoint 保持薄：不 import Dify、不实现规则判敏。
     """
-    result = ContractReviewHandler(db).cancel_task(task_id=task_id, subject=subject)
+    # 必须先校验任务归属，再加载 Agent/选择 handler；越权请求不会触发 runtime。
+    task = ContractReviewService(db).get_task(task_id=task_id, subject=subject)
+    agent = AgentService(db).get_agent_by_code(task.agent_code)
+    handler = get_task_handler_registry().select(agent)
+    ctx = TaskContext(
+        db=db,
+        subject=subject,
+        task_id=task_id,
+        agent=agent,
+        runtime_service=AgentRuntimeService(),
+        request_id=x_request_id,
+    )
+    result = await handler.execute(ctx)
     return success(ContractReviewTaskRead.model_validate(result))

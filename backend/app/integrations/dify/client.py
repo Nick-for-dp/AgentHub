@@ -20,7 +20,12 @@ import httpx
 from app.core.config import get_settings
 from app.core.exceptions import DifyIntegrationError, DifyNotConfiguredError
 from app.core.security import sanitize_dict_for_log
-from app.integrations.dify.schemas import DifyChatChunk, DifyChatRequest
+from app.integrations.dify.schemas import (
+    DifyChatChunk,
+    DifyChatRequest,
+    DifyWorkflowRunRequest,
+    DifyWorkflowRunResult,
+)
 from app.integrations.dify.streaming import parse_sse_lines
 
 logger = logging.getLogger(__name__)
@@ -231,3 +236,65 @@ class DifyClient:
                     chunk = parse_sse_lines(line)
                     if chunk:
                         yield chunk
+
+    async def run_workflow(
+        self,
+        runtime_app_id: str,
+        payload: DifyWorkflowRunRequest,
+        api_key: str | None = None,
+    ) -> DifyWorkflowRunResult:
+        """阻塞式调用 Dify Workflow API。
+
+        Args:
+            runtime_app_id: Dify App ID，仅用于日志和调用方追踪；Dify Workflow API
+                的鉴权由 API Key 决定。
+            payload: Workflow 请求体，通常包含 inputs、user、response_mode=blocking。
+            api_key: Workflow 对应的 Dify API Key。为空时回退全局 ``DIFY_API_KEY``。
+
+        Returns:
+            DifyWorkflowRunResult: 标准化后的 Dify workflow 结果，保留原始响应。
+
+        Raises:
+            DifyNotConfiguredError: Dify Base URL 或 API Key 未配置。
+            DifyIntegrationError: Dify 返回非 2xx 状态码。
+        """
+        effective_key = api_key or self.api_key
+        if not self.base_url or not effective_key:
+            raise DifyNotConfiguredError(
+                "Dify integration is not configured. "
+                "Please set DIFY_BASE_URL and DIFY_API_KEY in environment variables."
+            )
+
+        headers = {"Authorization": f"Bearer {effective_key}"}
+        url = f"{self.base_url}/v1/workflows/run"
+        body = payload.model_dump(exclude_none=True)
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Dify workflow request app_id=%s url=%s headers=%s body=%s",
+                runtime_app_id,
+                url,
+                _sanitize_headers_for_log(headers),
+                sanitize_dict_for_log(body),
+            )
+
+        async with httpx.AsyncClient(timeout=None) as client:
+            try:
+                response = await client.post(url, headers=headers, json=body)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                sanitized = _sanitize_error_body_for_message(exc.response.text or "")
+                message = f"Dify returned HTTP {exc.response.status_code}"
+                if sanitized:
+                    message = f"{message}: {sanitized}"
+                raise DifyIntegrationError(message) from exc
+            except httpx.HTTPError as exc:
+                raise DifyIntegrationError(f"Dify workflow request failed: {exc}") from exc
+
+        try:
+            response_payload = response.json()
+        except ValueError as exc:
+            raise DifyIntegrationError("Dify workflow returned non-JSON response") from exc
+        if not isinstance(response_payload, dict):
+            raise DifyIntegrationError("Dify workflow returned unexpected response")
+        return DifyWorkflowRunResult.from_response(response_payload)

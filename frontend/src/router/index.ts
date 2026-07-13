@@ -1,62 +1,12 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+import { createAppRoutes } from './routes'
+
+export { createAppRoutes } from './routes'
+
 const router = createRouter({
   history: createWebHistory(),
-  routes: [
-    {
-      path: '/',
-      redirect: '/login',
-    },
-    {
-      path: '/login',
-      component: () => import('../pages/auth/LoginPage.vue'),
-    },
-    {
-      path: '/chat',
-      component: () => import('../pages/chat/ChatPage.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/embed/chat',
-      component: () => import('../pages/chat/ChatPage.vue'),
-      meta: { embed: true },
-    },
-    {
-      path: '/admin',
-      component: () => import('../layouts/AdminLayout.vue'),
-      meta: { requiresAuth: true },
-      children: [
-        {
-          path: '',
-          redirect: '/admin/agents',
-        },
-        {
-          path: 'agents',
-          component: () => import('../pages/admin/AgentsPage.vue'),
-        },
-        {
-          path: 'knowledge-bases',
-          component: () => import('../pages/admin/KnowledgeBasesPage.vue'),
-        },
-        {
-          path: 'api-keys',
-          component: () => import('../pages/admin/ApiKeysPage.vue'),
-        },
-        {
-          path: 'invocation-records',
-          component: () => import('../pages/admin/InvocationRecordsPage.vue'),
-        },
-        {
-          path: 'leads',
-          component: () => import('../pages/admin/LeadsPage.vue'),
-        },
-        {
-          path: 'analytics',
-          component: () => import('../pages/admin/AnalyticsPage.vue'),
-        },
-      ],
-    },
-  ],
+  routes: createAppRoutes(),
 })
 
 // 路由守卫：需要登录的页面未认证时跳转登录页

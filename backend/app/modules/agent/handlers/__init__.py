@@ -1,11 +1,18 @@
-"""对话流 handler 抽象层。
+"""对话流 **ChatHandler** 抽象层。
 
-chat endpoint 按 ``agent.type`` 选择对话流 handler，把具体的流式逻辑下沉到
-handler 实现。endpoint 只负责鉴权、取 Agent、选 handler、写调用记录，不再
-感知 runtime provider 的专有类型。
+本包只服务 ``POST /api/v1/chat/{agent_code}`` 的流式对话调用。
+chat endpoint 按 ``agent.type`` 通过 ``ChatHandlerRegistry`` 选择 **ChatHandler**，
+把具体的流式逻辑下沉到实现类（如 ``QaChatHandler``）。endpoint 只负责鉴权、
+取 Agent、选 handler、写调用记录与产品会话协作，不再感知 runtime provider 的专有类型。
 
-新增非问答对话类 Agent 时，实现 ``ChatHandler`` 协议并在 ``ChatHandlerRegistry``
-注册即可，无需改动 chat endpoint 调用记录与产品会话协作链路。
+新增非问答**对话类** Agent 时，实现 ``ChatHandler`` 协议并在 ``ChatHandlerRegistry``
+注册即可，无需改动 chat endpoint。
+
+与任务型 Agent 的边界：
+- **ChatHandler**（本包）：SSE 流式对话，可插拔 chat 后处理器（如线索收集）。
+- **TaskHandler**（``modules/agent/task_handlers/``）：任务状态机 + 前处理/核心/后处理
+  流水线（如合同审查）。合同审查等任务型 Agent MUST NOT 注册为 ChatHandler 回退，
+  也不得走 chat 入口执行。
 """
 
 from collections.abc import AsyncIterator, Callable
@@ -24,7 +31,7 @@ from app.modules.agent.runtime import AgentRuntimeService
 
 @dataclass
 class ChatContext:
-    """一次 chat 调用的上下文，由 endpoint 组装后传给 handler。
+    """一次 chat 调用的上下文，由 endpoint 组装后传给 ChatHandler。
 
     handler 通过该上下文访问 runtime、产品会话和调用方信息，
     但不直接写调用记录（由 endpoint 在 finalize 阶段统一写入）。
@@ -45,14 +52,14 @@ class ChatContext:
 
 @runtime_checkable
 class ChatHandler(Protocol):
-    """对话流 handler 协议。
+    """对话流 ChatHandler 协议（非任务型 TaskHandler）。
 
     handler 负责消费 runtime 流式 chunk、产出 SSE 事件字典、
-    在流结束后归一化输出并运行后处理器，最终由 endpoint 调用
+    在流结束后归一化输出并运行 chat 后处理器，最终由 endpoint 调用
     ``build_finish`` 拿到调用记录快照。
 
     重要：handler 实例可持有单次请求的可变状态（answer 累积、node_trace 等）。
-    注册表必须为每次 chat 调用创建新实例，禁止跨请求复用同一 handler。
+    ChatHandlerRegistry 必须为每次 chat 调用创建新实例，禁止跨请求复用。
     """
 
     def stream(self, ctx: ChatContext) -> AsyncIterator[dict[str, Any]]:
@@ -80,18 +87,21 @@ class ChatHandler(Protocol):
         ...
 
 
-# handler 工厂：无参可调用对象，每次调用返回新的 ChatHandler 实例
+# ChatHandler 工厂：无参可调用对象，每次调用返回新的 ChatHandler 实例
 ChatHandlerFactory = Callable[[], ChatHandler]
 
 
 class ChatHandlerRegistry:
-    """按 ``agent.type`` 分发对话流 handler 的注册表。
+    """按 ``agent.type`` 分发**对话流 ChatHandler** 的注册表。
 
     注册的是工厂而非实例：每次 ``select`` 都创建新 handler，保证并发 chat
     请求之间的流式累积状态（answer / node_trace 等）完全隔离。
 
     未注册的 agent type 返回明确错误，不静默退化为问答 handler，
     避免错误配置被隐藏。未指定 type 时回退为问答（向后兼容）。
+
+    任务型 type（如 CONTRACT_REVIEW）不得注册于此表作为业务执行入口；
+    任务执行走 ``TaskHandlerRegistry``。
     """
 
     def __init__(self, factories: dict[str, ChatHandlerFactory] | None = None):
@@ -102,7 +112,7 @@ class ChatHandlerRegistry:
         self._factories: dict[str, ChatHandlerFactory] = factories
 
     def select(self, agent: Agent) -> ChatHandler:
-        """按 agent.type 创建新的 handler 实例；未指定回退问答，未注册抛错。"""
+        """按 agent.type 创建新的 ChatHandler 实例；未指定回退问答，未注册抛错。"""
         raw_type = getattr(agent, "type", None)
         if raw_type is None:
             raw_type = AgentType.QA
@@ -117,7 +127,7 @@ _default_registry: ChatHandlerRegistry | None = None
 
 
 def get_chat_handler_registry() -> ChatHandlerRegistry:
-    """获取默认 handler 注册表（惰性初始化，避免循环 import）。"""
+    """获取默认 ChatHandler 注册表（惰性初始化，避免循环 import）。"""
     global _default_registry
     if _default_registry is None:
         _default_registry = ChatHandlerRegistry()
