@@ -15,6 +15,7 @@ AgentHub 是一个 RAG 驱动的智能体应用平台。当前阶段聚焦智能
 | `docs/api.md` | API 说明。 |
 | `docs/testing.md` | 测试策略与验收清单。 |
 | `docs/deployment.md` | 本地和部署说明。 |
+| `deploy/single-host-dual-profile.md` | 同一服务器双 profile 试用部署 Runbook。 |
 | `docs/frontend-design.md` | 前端设计规范。 |
 | `docs/ui-review-checklist.md` | UI 验收清单。 |
 
@@ -29,6 +30,7 @@ AgentHub 是一个 RAG 驱动的智能体应用平台。当前阶段聚焦智能
 - 已支持产业互联网 iframe 嵌入主线：外部短期 JWT exchange 为 AgentHub `embed_session`，后续 iframe 请求使用 AgentHub 自己的 HttpOnly Cookie。
 - 已支持云端语音识别和语音播报；浏览器录音上传 16k mono WAV，后端对接火山 ASR/TTS。
 - internal profile 已支持合同审查工作台：内部用户可上传 PDF/DOCX、选择合同类型和对手方 A1-A7 资信等级，查看解析文本、规则判敏、warning 与原文 span 高亮。
+- 已支持受控试用期同机双实例部署：external/internal 使用独立进程、端口、Cookie、数据库、Dify/MinIO 凭证、venv、前端产物和日志；正式生产仍以 ADR-015 分机与网络隔离为目标。
 
 当前实施细节以 `PLAN.md`、`Archi.md` 为准；这两个文件属于本地协作文档，不作为远程交付物。
 
@@ -87,7 +89,7 @@ uv run alembic upgrade head
 
 ```powershell
 cd backend
-uv run python -m scripts.seed
+uv run python scripts/seed.py --profile external  # 或 internal；必须匹配 DEPLOYMENT_PROFILE
 ```
 
 本地访问入口：
@@ -97,6 +99,47 @@ AgentHub 前端：http://127.0.0.1:3000
 AgentHub 管理后台：http://127.0.0.1:3000/admin
 AgentHub 后端：http://127.0.0.1:8240
 ```
+
+## 启动方式
+
+### 单实例开发
+
+后端 `DEPLOYMENT_PROFILE` 与前端 `VITE_DEPLOYMENT_PROFILE` 必须一致。external 普通用户登录后进入 `/chat`；internal 普通用户进入 `/internal/contract-review`，并可切换风控助手。
+
+```powershell
+# external 或 internal 后端
+cd backend
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8240
+
+# 对应前端
+cd frontend
+npm run dev
+```
+
+双 profile 前端生产构建：
+
+```powershell
+cd frontend
+npm run build:profiles
+npm run check:profile-builds
+```
+
+产物分别位于 `frontend/dist/external` 与 `frontend/dist/internal`；external 构建不包含 internal 路由、合同审查/风控页面 chunk 或内部工作台文案。
+
+### 同一服务器双实例试用
+
+| 配置 | external | internal |
+|---|---|---|
+| IP 入口示例 | `http://APP_IP:8080` | `http://APP_IP:8081` |
+| backend | `127.0.0.1:8240` | `127.0.0.1:8241` |
+| EnvironmentFile | `/etc/agenthub/external.env` | `/etc/agenthub/internal.env` |
+| auth Cookie | `agenthub_session` | `agenthub_internal_session` |
+| Python 依赖 | 基础依赖，不含 PyMuPDF | `internal` extra，含 DOCX/PDF 解析 |
+| 数据/凭证 | 独立 MySQL schema/账号、Dify App/Key、MinIO account 与 `ext-*` bucket | 独立 MySQL schema/账号、Dify App/Key、MinIO account 与 `int-*` bucket |
+
+部署模板位于 `deploy/profiles/`、`deploy/systemd/`、`deploy/nginx/agenthub-single-host.conf`；完整步骤、预检、migration/seed、smoke、备份和独立回滚见 `deploy/single-host-dual-profile.md`。
+
+无域名 HTTP 只允许可信公司内网/VPN，internal 端口必须使用 CIDR allowlist + `deny all`，8240/8241 不得对其它机器开放。真实外部用户或未经脱敏的高敏合同/单据使用前必须启用 HTTPS（可使用内部 CA 的 IP SAN 证书）或迁移到正式分机拓扑。
 
 ## 内部合同审查工作台
 

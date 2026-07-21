@@ -1,0 +1,37 @@
+[Unit]
+Description=AgentHub Internal Backend
+Documentation=file:/opt/agenthub/current-internal/deploy/single-host-dual-profile.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=30
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=agenthub
+Group=agenthub
+WorkingDirectory=/opt/agenthub/current-internal/backend
+EnvironmentFile=/etc/agenthub/internal.env
+ExecStartPre=/usr/bin/test "${DEPLOYMENT_PROFILE}" = internal
+ExecStartPre=/usr/bin/test -x /opt/agenthub/venvs/internal/bin/python
+ExecStart=/opt/agenthub/venvs/internal/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8241 --proxy-headers --forwarded-allow-ips=127.0.0.1
+KillSignal=SIGTERM
+# Contract review/risk workflows can need a longer graceful shutdown window.
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agenthub-internal
+
+[Install]
+WantedBy=multi-user.target

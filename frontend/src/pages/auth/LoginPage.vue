@@ -2,8 +2,9 @@
   <main class="login-page">
     <div class="login-card">
       <div class="login-header">
-        <h1>AgentHub</h1>
-        <p>智能问答平台</p>
+        <span class="profile-label">{{ deploymentPresentation.environmentLabel }}</span>
+        <h1>{{ deploymentPresentation.productName }}</h1>
+        <p>{{ deploymentPresentation.subtitle }}</p>
       </div>
 
       <a-form
@@ -43,9 +44,14 @@
         </a-form-item>
       </a-form>
 
-      <a-alert v-if="errorMsg" type="error" show-icon closable @close="errorMsg = ''">
-        {{ errorMsg }}
-      </a-alert>
+      <a-alert
+        v-if="errorMsg"
+        type="error"
+        show-icon
+        closable
+        :message="errorMsg"
+        @close="errorMsg = ''"
+      />
     </div>
   </main>
 </template>
@@ -53,6 +59,7 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { deploymentPresentation } from '../../config/deploymentProfile'
 import { useAuthStore } from '../../stores/auth'
 
 const router = useRouter()
@@ -105,8 +112,9 @@ async function handleLogin() {
 }
 
 .login-header h1 {
-  margin: 0;
-  font-size: 28px;
+  margin: 8px 0 0;
+  font-size: 26px;
+  line-height: 1.25;
   color: var(--color-primary);
 }
 
@@ -114,6 +122,19 @@ async function handleLogin() {
   margin: 4px 0 0;
   color: var(--color-text-secondary);
   font-size: 14px;
+}
+
+.profile-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--color-primary-border);
+  border-radius: 999px;
+  background: var(--color-primary-bg);
+  color: var(--color-primary-hover);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .login-card :deep(.ant-input),
@@ -135,5 +156,20 @@ async function handleLogin() {
   display: inline-flex;
   align-items: center;
   font-size: 18px;
+}
+
+@media (max-width: 480px) {
+  .login-page {
+    padding: 16px;
+  }
+
+  .login-card {
+    width: 100%;
+    padding: 32px 24px 28px;
+  }
+
+  .login-header h1 {
+    font-size: 22px;
+  }
 }
 </style>

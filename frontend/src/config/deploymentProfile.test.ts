@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { getDefaultHomePath, resolveDeploymentProfile } from './deploymentProfile'
+import {
+  getDefaultHomePath,
+  getDeploymentPresentation,
+  resolveDeploymentProfile,
+} from './deploymentProfile'
 import { createAppRoutes } from '../router/routes'
 
 describe('deployment profile', () => {
@@ -16,6 +20,12 @@ describe('deployment profile', () => {
     expect(JSON.stringify(routes)).not.toContain('risk-assistant')
     expect(JSON.stringify(routes)).not.toContain('RiskAssistantPage')
     expect(getDefaultHomePath(false, 'external')).toBe('/chat')
+    expect(getDeploymentPresentation('external')).toEqual({
+      productName: 'AgentHub 营销智能体',
+      subtitle: '产品咨询与营销问答服务',
+      environmentLabel: '外部服务',
+      defaultHomePath: '/chat',
+    })
   })
 
   it('registers a login-protected workbench only for internal builds', () => {
@@ -27,5 +37,11 @@ describe('deployment profile', () => {
     expect(detail?.props).toBe(true)
     expect(getDefaultHomePath(false, 'internal')).toBe('/internal/contract-review')
     expect(getDefaultHomePath(true, 'internal')).toBe('/admin/agents')
+    expect(getDeploymentPresentation('internal')).toEqual({
+      productName: 'AgentHub 内部智能体',
+      subtitle: '合同审查与风控工作台',
+      environmentLabel: '内部试用',
+      defaultHomePath: '/internal/contract-review',
+    })
   })
 })

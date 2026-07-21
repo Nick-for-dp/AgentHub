@@ -1,36 +1,34 @@
-"""种子数据脚本
+"""按 deployment profile 初始化 AgentHub 最小闭环数据。
 
-为 MVP 演示环境创建最小闭环数据：
-内部管理员 → 外部客户 → API Key → Agent → KB → 权限策略
+用法：
+    cd backend
+    python -m scripts.seed
+    python -m scripts.seed --profile external
+    python -m scripts.seed --profile internal
 
-幂等：已存在的数据跳过，可多次执行。
-
-用法：cd backend && python scripts/seed.py
-
-环境变量：
-  SEED_RUNTIME_APP_ID  Dify App ID（可选，未设则用占位符）
-  SEED_PROVIDER_KB_ID  Dify 知识库 ID（可选，未设则用占位符）
-  SEED_EXT_PHONE       外部客户手机号（可选，默认 +8613800001234）
-  CONTRACT_REVIEW_DIFY_API_KEY  合同审查正式 workflow API Key
-  CONTRACT_REVIEW_FULL_CONTEXT_DIFY_API_KEY  本地过渡回退 key
-
-Dify API Key 直接复用 .env 中的 DIFY_API_KEY（经 Settings 加载），
-未配置时退回占位符，Agent 元数据可创建但实际调用 Dify 会失败。
+未显式传 ``--profile`` 时使用 ``DEPLOYMENT_PROFILE``。显式值与运行时配置不一致时
+在任何数据库写入前失败，避免同机双实例把数据初始化到错误的 schema。
 """
 
+from __future__ import annotations
+
+import argparse
 import os
 import sys
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from sqlalchemy.orm import Session
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from datetime import datetime, timedelta, timezone
-
-from app.core.config import get_settings
+from app.core.config import PRODUCTION_ENVIRONMENTS, Settings, get_settings
 from app.core.enums import (
     APIKeyOwnerType,
     APIKeyStatus,
     AgentType,
+    DeploymentProfile,
     OrgUnitType,
     PolicyEffect,
     PublishStatus,
@@ -41,421 +39,661 @@ from app.core.enums import (
     UserType,
     Visibility,
 )
-from app.core.security import generate_api_key_for_phone
+from app.core.exceptions import ConflictError
+from app.core.security import generate_api_key_for_phone, normalize_phone
 from app.db.session import get_db
+from app.modules.agent.models import Agent
 from app.modules.agent.schemas import AgentCreate, AgentKnowledgeBaseBind
 from app.modules.agent.service import AgentService
 from app.modules.auth.models import APIKey
 from app.modules.auth.schemas import APIKeyCreateByPhone, PermissionPolicyCreate
 from app.modules.auth.service import AuthService
+from app.modules.knowledge.models import KnowledgeBase
 from app.modules.knowledge.schemas import KnowledgeBaseCreate
 from app.modules.knowledge.service import KnowledgeService
+from app.modules.org.models import OrgUnit, UserAccount
 from app.modules.org.schemas import OrgUnitCreate, UserCreate
 from app.modules.org.service import OrgService
 
-# ── Dify 集成配置 ──────────────────────────────────────────────
-# Dify API Key 复用 .env 中的 DIFY_API_KEY（必须经 Settings 读取，os.getenv 不读 .env）。
-# 未配置时使用占位符：Agent/KB 元数据会创建，但实际调用 Dify 时会因 Key 无效而失败。
-_SETTINGS = get_settings()
-_SEED_PLACEHOLDER_DIFY_KEY = "seed-placeholder-not-a-real-key"
-_SEED_DIFY_API_KEY = _SETTINGS.dify_api_key or _SEED_PLACEHOLDER_DIFY_KEY
-_SEED_RUNTIME_APP_ID = os.getenv("SEED_RUNTIME_APP_ID", "00000000-0000-0000-0000-000000000000")
-_SEED_PROVIDER_KB_ID = os.getenv("SEED_PROVIDER_KB_ID", "00000000-0000-0000-0000-000000000000")
-_CONTRACT_REVIEW_RUNTIME_APP_ID = os.getenv(
-    "CONTRACT_REVIEW_RUNTIME_APP_ID",
-    "contract-review-full-context",
-)
-_CONTRACT_REVIEW_DIFY_API_KEY = (
-    _SETTINGS.contract_review_dify_api_key
-    or _SETTINGS.contract_review_full_context_dify_api_key
-    or _SEED_PLACEHOLDER_DIFY_KEY
-)
-_SEED_EXT_PHONE = os.getenv("SEED_EXT_PHONE", "+8613800001234")
-# 仅用于本地演示，生产环境必须通过安全渠道设置密码
-_SEED_EXT_PASSWORD = os.getenv("SEED_EXT_PASSWORD", "Demo8Pass")
-# 内部管理员登录账号（带手机号+密码，可在登录页用账密登录并访问管理端）
-_SEED_ADMIN_PHONE = os.getenv("SEED_ADMIN_PHONE", "+8613900000000")
-_SEED_ADMIN_PASSWORD = os.getenv("SEED_ADMIN_PASSWORD", "Admin8Pass")
-# 第二个外部客户（营销智能体测试用户）
-_SEED_EXT2_PHONE = os.getenv("SEED_EXT2_PHONE", "+8613800005678")
-_SEED_EXT2_PASSWORD = os.getenv("SEED_EXT2_PASSWORD", "Demo8Pass")
+
+SEED_PLACEHOLDER_DIFY_KEY = "seed-placeholder-not-a-real-key"
+DEFAULT_RUNTIME_APP_ID = "00000000-0000-0000-0000-000000000000"
+DEFAULT_PROVIDER_KB_ID = "00000000-0000-0000-0000-000000000000"
+DEFAULT_CONTRACT_REVIEW_APP_ID = "contract-review-full-context"
 
 
-def seed() -> None:
-    db = next(get_db())
+@dataclass(frozen=True)
+class SeedInputs:
+    admin_phone: str
+    admin_password: str
+    external_phone: str
+    external_password: str
+    second_external_phone: str
+    second_external_password: str
+    marketing_runtime_app_id: str
+    provider_kb_id: str
+    marketing_dify_api_key: str
+    contract_review_runtime_app_id: str
+    contract_review_dify_api_key: str
 
-    org_service = OrgService(db)
-    auth_service = AuthService(db)
-    agent_service = AgentService(db)
-    knowledge_service = KnowledgeService(db)
-
-    # ── 内部组织与管理员 ────────────────────────────────────
-    internal_orgs = [o for o in org_service.list_org_units()
-                     if o.name == "AgentHub 内部" and o.type == OrgUnitType.INTERNAL_COMPANY]
-    if internal_orgs:
-        internal_org = internal_orgs[0]
-    else:
-        internal_org = org_service.create_org_unit(
-            OrgUnitCreate(name="AgentHub 内部", type=OrgUnitType.INTERNAL_COMPANY)
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "SeedInputs":
+        return cls(
+            admin_phone=os.getenv("SEED_ADMIN_PHONE", "+8613900000000"),
+            admin_password=os.getenv("SEED_ADMIN_PASSWORD", "Admin8Pass"),
+            external_phone=os.getenv("SEED_EXT_PHONE", "+8613800001234"),
+            external_password=os.getenv("SEED_EXT_PASSWORD", "Demo8Pass"),
+            second_external_phone=os.getenv("SEED_EXT2_PHONE", "+8613800005678"),
+            second_external_password=os.getenv("SEED_EXT2_PASSWORD", "Demo8Pass"),
+            marketing_runtime_app_id=os.getenv(
+                "SEED_RUNTIME_APP_ID",
+                DEFAULT_RUNTIME_APP_ID,
+            ),
+            provider_kb_id=os.getenv("SEED_PROVIDER_KB_ID", DEFAULT_PROVIDER_KB_ID),
+            marketing_dify_api_key=settings.dify_api_key or SEED_PLACEHOLDER_DIFY_KEY,
+            contract_review_runtime_app_id=os.getenv(
+                "CONTRACT_REVIEW_RUNTIME_APP_ID",
+                DEFAULT_CONTRACT_REVIEW_APP_ID,
+            ),
+            contract_review_dify_api_key=(
+                settings.contract_review_dify_api_key
+                or settings.contract_review_full_context_dify_api_key
+                or SEED_PLACEHOLDER_DIFY_KEY
+            ),
         )
 
-    admin_depts = [o for o in org_service.list_org_units()
-                   if o.name == "技术部" and o.type == OrgUnitType.INTERNAL_DEPARTMENT]
-    if admin_depts:
-        admin_dept = admin_depts[0]
-    else:
-        admin_dept = org_service.create_org_unit(
-            OrgUnitCreate(
-                name="技术部",
-                type=OrgUnitType.INTERNAL_DEPARTMENT,
-                parent_id=internal_org.id,
-            )
+
+@dataclass
+class SeedSummary:
+    profile: DeploymentProfile
+    admin_phone: str
+    admin_key_prefix: str
+    admin_key_raw: str | None = None
+    external_phones: list[str] = field(default_factory=list)
+    external_passwords: list[str] = field(default_factory=list)
+    external_key_prefix: str | None = None
+    external_key_raw: str | None = None
+    agent_codes: list[str] = field(default_factory=list)
+    knowledge_base_name: str | None = None
+    contract_review_key_configured: bool | None = None
+
+
+@dataclass(frozen=True)
+class SeedServices:
+    db: Session
+    org: OrgService
+    auth: AuthService
+    agent: AgentService
+    knowledge: KnowledgeService
+
+    @classmethod
+    def create(cls, db: Session) -> "SeedServices":
+        return cls(
+            db=db,
+            org=OrgService(db),
+            auth=AuthService(db),
+            agent=AgentService(db),
+            knowledge=KnowledgeService(db),
         )
 
-    admin_users = [u for u in org_service.list_users() if u.email == "admin@agenthub.local"]
-    if admin_users:
-        admin_user = admin_users[0]
-    else:
-        # 管理员是内部员工，带手机号+密码，可在登录页用账密登录并访问管理端。
-        # 内部员工手机号无唯一约束，登录走内部员工回退查询路径。
-        admin_user = org_service.create_user(
+
+def seed(
+    profile: DeploymentProfile | str | None = None,
+    *,
+    db: Session | None = None,
+    settings: Settings | None = None,
+) -> SeedSummary:
+    """初始化当前 deployment profile，并返回不直接打印的结果摘要。"""
+    resolved_settings = settings or get_settings()
+    requested_profile = DeploymentProfile(profile or resolved_settings.deployment_profile)
+    if requested_profile != resolved_settings.deployment_profile:
+        raise ValueError(
+            "seed profile must match DEPLOYMENT_PROFILE before database initialization"
+        )
+
+    inputs = SeedInputs.from_settings(resolved_settings)
+    db_generator = None
+    if db is None:
+        db_generator = get_db()
+        db = next(db_generator)
+
+    try:
+        services = SeedServices.create(db)
+        if requested_profile == DeploymentProfile.EXTERNAL:
+            return _seed_external(services, inputs)
+        return _seed_internal(services, inputs)
+    finally:
+        if db_generator is not None:
+            db_generator.close()
+
+
+def _seed_external(services: SeedServices, inputs: SeedInputs) -> SeedSummary:
+    admin_user, admin_key, admin_key_raw = _seed_platform_admin(
+        services,
+        inputs,
+        organization_name="AgentHub 运营",
+        department_name=None,
+    )
+
+    external_org = _get_or_create_org(
+        services,
+        name="测试外部客户",
+        org_type=OrgUnitType.EXTERNAL_CUSTOMER,
+    )
+    external_user = _get_or_create_external_user(
+        services,
+        organization=external_org,
+        name="张三",
+        phone=inputs.external_phone,
+        password=inputs.external_password,
+    )
+    second_external_user = _get_or_create_external_user(
+        services,
+        organization=external_org,
+        name="李四",
+        phone=inputs.second_external_phone,
+        password=inputs.second_external_password,
+    )
+    external_key, external_key_raw = _get_or_create_external_key(
+        services,
+        external_user,
+        inputs.external_phone,
+    )
+    marketing_agent = _get_or_create_marketing_agent(services, external_org, inputs)
+    knowledge_base = _get_or_create_marketing_knowledge_base(
+        services,
+        external_org,
+        inputs,
+    )
+    _bind_knowledge_base(services, marketing_agent, knowledge_base)
+    _ensure_permission(
+        services,
+        subject_type=SubjectType.ORG_UNIT,
+        subject_id=external_org.id,
+        resource_type=ResourceType.AGENT,
+        resource_id=marketing_agent.id,
+        actions=["invoke"],
+    )
+
+    return SeedSummary(
+        profile=DeploymentProfile.EXTERNAL,
+        admin_phone=admin_user.phone_normalized or inputs.admin_phone,
+        admin_key_prefix=admin_key.key_prefix,
+        admin_key_raw=admin_key_raw,
+        external_phones=[
+            external_user.phone_normalized or inputs.external_phone,
+            second_external_user.phone_normalized or inputs.second_external_phone,
+        ],
+        external_passwords=[inputs.external_password, inputs.second_external_password],
+        external_key_prefix=external_key.key_prefix,
+        external_key_raw=external_key_raw,
+        agent_codes=[marketing_agent.code],
+        knowledge_base_name=knowledge_base.name,
+    )
+
+
+def _seed_internal(services: SeedServices, inputs: SeedInputs) -> SeedSummary:
+    admin_user, admin_key, admin_key_raw = _seed_platform_admin(
+        services,
+        inputs,
+        organization_name="AgentHub 内部",
+        department_name="技术部",
+    )
+    admin_department = services.org.repository.get_org_unit(admin_user.org_unit_id)
+    if admin_department is None:
+        raise RuntimeError("internal administrator department was not created")
+
+    contract_review_agent = _get_or_create_contract_review_agent(
+        services,
+        admin_department,
+        inputs,
+    )
+    risk_agent = _get_or_create_risk_agent(services, admin_department)
+    _ensure_permission(
+        services,
+        subject_type=SubjectType.ORG_UNIT,
+        subject_id=admin_department.id,
+        resource_type=ResourceType.AGENT,
+        resource_id=risk_agent.id,
+        actions=["invoke"],
+    )
+
+    return SeedSummary(
+        profile=DeploymentProfile.INTERNAL,
+        admin_phone=admin_user.phone_normalized or inputs.admin_phone,
+        admin_key_prefix=admin_key.key_prefix,
+        admin_key_raw=admin_key_raw,
+        agent_codes=[contract_review_agent.code, risk_agent.code],
+        contract_review_key_configured=(
+            inputs.contract_review_dify_api_key != SEED_PLACEHOLDER_DIFY_KEY
+        ),
+    )
+
+
+def _seed_platform_admin(
+    services: SeedServices,
+    inputs: SeedInputs,
+    *,
+    organization_name: str,
+    department_name: str | None,
+) -> tuple[UserAccount, APIKey, str | None]:
+    organization = _get_or_create_org(
+        services,
+        name=organization_name,
+        org_type=OrgUnitType.INTERNAL_COMPANY,
+    )
+    owner = organization
+    if department_name:
+        owner = _get_or_create_org(
+            services,
+            name=department_name,
+            org_type=OrgUnitType.INTERNAL_DEPARTMENT,
+            parent_id=organization.id,
+        )
+
+    admin_user = next(
+        (user for user in services.org.list_users() if user.email == "admin@agenthub.local"),
+        None,
+    )
+    if admin_user is None:
+        admin_user = services.org.create_user(
             UserCreate(
-                org_unit_id=admin_dept.id,
+                org_unit_id=owner.id,
                 name="管理员",
                 user_type=UserType.INTERNAL_EMPLOYEE,
                 email="admin@agenthub.local",
-                phone=_SEED_ADMIN_PHONE,
-                password=_SEED_ADMIN_PASSWORD,
+                phone=inputs.admin_phone,
+                password=inputs.admin_password,
             )
         )
 
-    # ── 外部客户组织与用户 ─────────────────────────────────
-    ext_orgs = [o for o in org_service.list_org_units()
-                if o.name == "测试外部客户" and o.type == OrgUnitType.EXTERNAL_CUSTOMER]
-    if ext_orgs:
-        ext_org = ext_orgs[0]
-    else:
-        ext_org = org_service.create_org_unit(
-            OrgUnitCreate(name="测试外部客户", type=OrgUnitType.EXTERNAL_CUSTOMER)
-        )
+    admin_key, admin_key_raw = _get_or_create_admin_key(services, admin_user)
+    _ensure_permission(
+        services,
+        subject_type=SubjectType.USER,
+        subject_id=admin_user.id,
+        resource_type=ResourceType.API,
+        resource_id="*",
+        actions=["manage"],
+    )
+    return admin_user, admin_key, admin_key_raw
 
-    ext_users = [u for u in org_service.list_users()
-                 if u.user_type == UserType.EXTERNAL_CUSTOMER and u.phone_normalized == _SEED_EXT_PHONE]
-    if ext_users:
-        ext_user = ext_users[0]
-    else:
-        ext_user = org_service.create_user(
-            UserCreate(
-                org_unit_id=ext_org.id,
-                name="张三",
-                user_type=UserType.EXTERNAL_CUSTOMER,
-                phone=_SEED_EXT_PHONE,
-                password=_SEED_EXT_PASSWORD,
-            )
-        )
 
-    # 第二个外部客户（营销智能体测试用户）。放在同一外部客户组织下，
-    # 自动继承组织级 qa Agent invoke 权限策略，可独立登录测试问答。
-    ext2_users = [u for u in org_service.list_users()
-                  if u.user_type == UserType.EXTERNAL_CUSTOMER and u.phone_normalized == _SEED_EXT2_PHONE]
-    if ext2_users:
-        ext2_user = ext2_users[0]
-    else:
-        ext2_user = org_service.create_user(
-            UserCreate(
-                org_unit_id=ext_org.id,
-                name="李四",
-                user_type=UserType.EXTERNAL_CUSTOMER,
-                phone=_SEED_EXT2_PHONE,
-                password=_SEED_EXT2_PASSWORD,
-            )
-        )
+def _get_or_create_org(
+    services: SeedServices,
+    *,
+    name: str,
+    org_type: OrgUnitType,
+    parent_id: str | None = None,
+) -> OrgUnit:
+    existing = next(
+        (
+            org
+            for org in services.org.list_org_units()
+            if org.name == name and org.type == org_type and org.parent_id == parent_id
+        ),
+        None,
+    )
+    if existing is not None:
+        return existing
+    return services.org.create_org_unit(
+        OrgUnitCreate(name=name, type=org_type, parent_id=parent_id)
+    )
 
-    # ── API Key ─────────────────────────────────────────────
-    # 外部客户 Key：通过手机号签发，用于 Q&A 调用
-    issued_raw_key: str | None = None
-    ext_keys = [k for k in auth_service.list_api_keys()
-                if k.issued_for_phone == ext_user.phone_normalized and k.status == "ACTIVE"]
-    if ext_keys:
-        api_key_record = ext_keys[0]
-        issued_raw_key = None
-    else:
-        raw_key, api_key_record = auth_service.issue_external_customer_api_key_by_phone(
-            APIKeyCreateByPhone(
-                phone=ext_user.phone or _SEED_EXT_PHONE,
-                name="MVP 演示 Key",
-                scopes=["invoke", "read"],
-                expires_at=datetime.now(timezone.utc) + timedelta(days=365),
-            )
-        )
-        issued_raw_key = raw_key
 
-    # 管理员 Key：内部管理员用于访问管理端
-    admin_key_raw: str | None = None
-    admin_keys = [k for k in auth_service.list_api_keys()
-                  if k.owner_type == APIKeyOwnerType.USER
-                  and k.owner_id == admin_user.id
-                  and k.status == "ACTIVE"]
-    if admin_keys:
-        admin_key_record = admin_keys[0]
-    else:
-        # 管理员没有手机号（内部员工），用固定上下文直接生成 Key
-        admin_generated = generate_api_key_for_phone("admin@agenthub.local")
-        admin_key_record = APIKey(
-            key_prefix=admin_generated.key_prefix,
-            key_hash=admin_generated.key_hash,
-            owner_type=APIKeyOwnerType.USER,
-            owner_id=admin_user.id,
-            issued_for_phone=None,  # 管理员不通过手机号签发
-            name="管理员 Key",
-            scopes=["*"],
-            status=APIKeyStatus.ACTIVE,
+def _get_or_create_external_user(
+    services: SeedServices,
+    *,
+    organization: OrgUnit,
+    name: str,
+    phone: str,
+    password: str,
+) -> UserAccount:
+    normalized_phone = normalize_phone(phone)
+    existing = next(
+        (
+            user
+            for user in services.org.list_users()
+            if user.user_type == UserType.EXTERNAL_CUSTOMER
+            and user.phone_normalized == normalized_phone
+        ),
+        None,
+    )
+    if existing is not None:
+        return existing
+    return services.org.create_user(
+        UserCreate(
+            org_unit_id=organization.id,
+            name=name,
+            user_type=UserType.EXTERNAL_CUSTOMER,
+            phone=phone,
+            password=password,
+        )
+    )
+
+
+def _get_or_create_external_key(
+    services: SeedServices,
+    user: UserAccount,
+    fallback_phone: str,
+) -> tuple[APIKey, str | None]:
+    existing = next(
+        (
+            key
+            for key in services.auth.list_api_keys()
+            if key.issued_for_phone == user.phone_normalized and key.status == APIKeyStatus.ACTIVE
+        ),
+        None,
+    )
+    if existing is not None:
+        return existing, None
+    raw_key, record = services.auth.issue_external_customer_api_key_by_phone(
+        APIKeyCreateByPhone(
+            phone=user.phone or fallback_phone,
+            name="MVP 演示 Key",
+            scopes=["invoke", "read"],
             expires_at=datetime.now(timezone.utc) + timedelta(days=365),
         )
-        auth_service.repository.add_api_key(admin_key_record)
-        db.commit()
-        db.refresh(admin_key_record)
-        admin_key_raw = admin_generated.raw_key
+    )
+    return record, raw_key
 
-    # ── Agent ───────────────────────────────────────────────
-    agents = [a for a in agent_service.list_agents() if a.code == "qa"]
-    if agents:
-        agent = agents[0]
-    else:
-        # config_snapshot 中的 dify_api_key 来自环境变量 SEED_DIFY_API_KEY
-        # 未配置时使用占位符，Agent 元数据可正常创建但调用 Dify 会失败
-        agent = agent_service.create_agent(
+
+def _get_or_create_admin_key(
+    services: SeedServices,
+    admin_user: UserAccount,
+) -> tuple[APIKey, str | None]:
+    existing = next(
+        (
+            key
+            for key in services.auth.list_api_keys()
+            if key.owner_type == APIKeyOwnerType.USER
+            and key.owner_id == admin_user.id
+            and key.status == APIKeyStatus.ACTIVE
+        ),
+        None,
+    )
+    if existing is not None:
+        return existing, None
+
+    generated = generate_api_key_for_phone("admin@agenthub.local")
+    record = APIKey(
+        key_prefix=generated.key_prefix,
+        key_hash=generated.key_hash,
+        owner_type=APIKeyOwnerType.USER,
+        owner_id=admin_user.id,
+        issued_for_phone=None,
+        name="管理员 Key",
+        scopes=["*"],
+        status=APIKeyStatus.ACTIVE,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=365),
+    )
+    services.auth.repository.add_api_key(record)
+    services.db.commit()
+    services.db.refresh(record)
+    return record, generated.raw_key
+
+
+def _get_or_create_marketing_agent(
+    services: SeedServices,
+    owner: OrgUnit,
+    inputs: SeedInputs,
+) -> Agent:
+    existing = next(
+        (agent for agent in services.agent.list_agents() if agent.code == "qa"),
+        None,
+    )
+    config = dict(existing.config_snapshot or {}) if existing else {}
+    if inputs.marketing_dify_api_key != SEED_PLACEHOLDER_DIFY_KEY or not config.get("dify_api_key"):
+        config["dify_api_key"] = inputs.marketing_dify_api_key
+    config.setdefault("prompt_template", "")
+
+    if existing is None:
+        existing = services.agent.create_agent(
             AgentCreate(
                 code="qa",
-                name="智能问答 Agent",
+                name="营销智能体",
                 type=AgentType.QA,
-                description="MVP 演示用 Q&A Agent",
-                owner_org_unit_id=ext_org.id,
+                description="面向外部客户的产品咨询与营销问答 Agent",
+                owner_org_unit_id=owner.id,
                 runtime_type=RuntimeType.DIFY,
-                runtime_app_id=_SEED_RUNTIME_APP_ID,
+                runtime_app_id=inputs.marketing_runtime_app_id,
                 visibility=Visibility.EXTERNAL,
-                config_snapshot={
-                    "dify_api_key": _SEED_DIFY_API_KEY,
-                    "prompt_template": "",
-                },
+                config_snapshot=config,
             )
         )
+    existing.name = "营销智能体"
+    existing.type = AgentType.QA
+    existing.description = "面向外部客户的产品咨询与营销问答 Agent"
+    existing.owner_org_unit_id = owner.id
+    existing.runtime_type = RuntimeType.DIFY
+    existing.runtime_app_id = inputs.marketing_runtime_app_id
+    existing.publish_status = PublishStatus.PUBLISHED
+    existing.visibility = Visibility.EXTERNAL
+    existing.config_snapshot = config
+    services.db.add(existing)
+    services.db.commit()
+    services.db.refresh(existing)
+    return existing
 
-    # ── 合同审查 Agent ───────────────────────────────────────
-    contract_review_agents = [
-        a for a in agent_service.list_agents() if a.code == "contract-review"
-    ]
-    if contract_review_agents:
-        contract_review_agent = contract_review_agents[0]
-        contract_review_config = dict(contract_review_agent.config_snapshot or {})
-        contract_review_config.setdefault("input_strategy", "full_context_no_filter")
-        # 不用占位符覆盖已有真实 key；只有明确配置 key 或原本没有 key 时才写入。
-        if (
-            _CONTRACT_REVIEW_DIFY_API_KEY != _SEED_PLACEHOLDER_DIFY_KEY
-            or not contract_review_config.get("dify_api_key")
-        ):
-            contract_review_config["dify_api_key"] = _CONTRACT_REVIEW_DIFY_API_KEY
-        contract_review_agent.name = "合同审查 Agent"
-        contract_review_agent.type = AgentType.CONTRACT_REVIEW
-        contract_review_agent.description = "内部合同审查 MVP：全文上下文条款抽取与后端规则判敏"
-        contract_review_agent.owner_org_unit_id = admin_dept.id
-        contract_review_agent.runtime_type = RuntimeType.DIFY
-        contract_review_agent.runtime_app_id = _CONTRACT_REVIEW_RUNTIME_APP_ID
-        contract_review_agent.publish_status = PublishStatus.PUBLISHED
-        contract_review_agent.visibility = Visibility.INTERNAL
-        contract_review_agent.config_snapshot = contract_review_config
-        db.add(contract_review_agent)
-        db.commit()
-        db.refresh(contract_review_agent)
-    else:
-        contract_review_agent = agent_service.create_agent(
+
+def _get_or_create_contract_review_agent(
+    services: SeedServices,
+    owner: OrgUnit,
+    inputs: SeedInputs,
+) -> Agent:
+    existing = next(
+        (agent for agent in services.agent.list_agents() if agent.code == "contract-review"),
+        None,
+    )
+    config = dict(existing.config_snapshot or {}) if existing else {}
+    config.setdefault("input_strategy", "full_context_no_filter")
+    if inputs.contract_review_dify_api_key != SEED_PLACEHOLDER_DIFY_KEY or not config.get(
+        "dify_api_key"
+    ):
+        config["dify_api_key"] = inputs.contract_review_dify_api_key
+
+    if existing is None:
+        existing = services.agent.create_agent(
             AgentCreate(
                 code="contract-review",
                 name="合同审查 Agent",
                 type=AgentType.CONTRACT_REVIEW,
                 description="内部合同审查 MVP：全文上下文条款抽取与后端规则判敏",
-                owner_org_unit_id=admin_dept.id,
+                owner_org_unit_id=owner.id,
                 runtime_type=RuntimeType.DIFY,
-                runtime_app_id=_CONTRACT_REVIEW_RUNTIME_APP_ID,
+                runtime_app_id=inputs.contract_review_runtime_app_id,
                 visibility=Visibility.INTERNAL,
-                config_snapshot={
-                    "dify_api_key": _CONTRACT_REVIEW_DIFY_API_KEY,
-                    "input_strategy": "full_context_no_filter",
-                },
+                config_snapshot=config,
             )
         )
-        contract_review_agent.publish_status = PublishStatus.PUBLISHED
-        db.add(contract_review_agent)
-        db.commit()
-        db.refresh(contract_review_agent)
+    existing.name = "合同审查 Agent"
+    existing.type = AgentType.CONTRACT_REVIEW
+    existing.description = "内部合同审查 MVP：全文上下文条款抽取与后端规则判敏"
+    existing.owner_org_unit_id = owner.id
+    existing.runtime_type = RuntimeType.DIFY
+    existing.runtime_app_id = inputs.contract_review_runtime_app_id
+    existing.publish_status = PublishStatus.PUBLISHED
+    existing.visibility = Visibility.INTERNAL
+    existing.config_snapshot = config
+    services.db.add(existing)
+    services.db.commit()
+    services.db.refresh(existing)
+    return existing
 
-    # ── 风控助手 Agent ───────────────────────────────────────
-    risk_agents = [a for a in agent_service.list_agents() if a.code == "risk-assistant"]
-    if risk_agents:
-        risk_agent = risk_agents[0]
-        risk_agent.name = "风控助手 Agent"
-        risk_agent.type = AgentType.RISK_ASSISTANT
-        risk_agent.description = "内部供应链合同事实核对、确定性规则与人工复核"
-        risk_agent.owner_org_unit_id = admin_dept.id
-        risk_agent.runtime_type = RuntimeType.CUSTOM
-        risk_agent.runtime_app_id = "risk-assessment-langgraph"
-        risk_agent.publish_status = PublishStatus.PUBLISHED
-        risk_agent.visibility = Visibility.INTERNAL
-        risk_agent.config_snapshot = {
-            "graph": "risk-assessment-graph",
-            "schema_version": "risk-graph-v1",
-        }
-        db.add(risk_agent)
-        db.commit()
-        db.refresh(risk_agent)
-    else:
-        risk_agent = agent_service.create_agent(
+
+def _get_or_create_risk_agent(services: SeedServices, owner: OrgUnit) -> Agent:
+    existing = next(
+        (agent for agent in services.agent.list_agents() if agent.code == "risk-assistant"),
+        None,
+    )
+    config = {
+        "graph": "risk-assessment-graph",
+        "schema_version": "risk-graph-v1",
+    }
+    if existing is None:
+        existing = services.agent.create_agent(
             AgentCreate(
                 code="risk-assistant",
                 name="风控助手 Agent",
                 type=AgentType.RISK_ASSISTANT,
                 description="内部供应链合同事实核对、确定性规则与人工复核",
-                owner_org_unit_id=admin_dept.id,
+                owner_org_unit_id=owner.id,
                 runtime_type=RuntimeType.CUSTOM,
                 runtime_app_id="risk-assessment-langgraph",
                 visibility=Visibility.INTERNAL,
-                config_snapshot={
-                    "graph": "risk-assessment-graph",
-                    "schema_version": "risk-graph-v1",
-                },
+                config_snapshot=config,
             )
         )
-        risk_agent.publish_status = PublishStatus.PUBLISHED
-        db.add(risk_agent)
-        db.commit()
-        db.refresh(risk_agent)
+    existing.name = "风控助手 Agent"
+    existing.type = AgentType.RISK_ASSISTANT
+    existing.description = "内部供应链合同事实核对、确定性规则与人工复核"
+    existing.owner_org_unit_id = owner.id
+    existing.runtime_type = RuntimeType.CUSTOM
+    existing.runtime_app_id = "risk-assessment-langgraph"
+    existing.publish_status = PublishStatus.PUBLISHED
+    existing.visibility = Visibility.INTERNAL
+    existing.config_snapshot = config
+    services.db.add(existing)
+    services.db.commit()
+    services.db.refresh(existing)
+    return existing
 
-    # ── 知识库 ──────────────────────────────────────────────
-    kbs = [k for k in knowledge_service.list_knowledge_bases() if k.name == "MVP 知识库"]
-    if kbs:
-        kb = kbs[0]
-    else:
-        kb = knowledge_service.create_knowledge_base(
-            KnowledgeBaseCreate(
-                name="MVP 知识库",
-                owner_org_unit_id=ext_org.id,
-                provider=ProviderType.DIFY,
-                provider_kb_id=_SEED_PROVIDER_KB_ID,
-            )
+
+def _get_or_create_marketing_knowledge_base(
+    services: SeedServices,
+    owner: OrgUnit,
+    inputs: SeedInputs,
+) -> KnowledgeBase:
+    existing = next(
+        (
+            knowledge_base
+            for knowledge_base in services.knowledge.list_knowledge_bases()
+            if knowledge_base.name == "MVP 知识库"
+        ),
+        None,
+    )
+    if existing is not None:
+        return existing
+    return services.knowledge.create_knowledge_base(
+        KnowledgeBaseCreate(
+            name="MVP 知识库",
+            owner_org_unit_id=owner.id,
+            provider=ProviderType.DIFY,
+            provider_kb_id=inputs.provider_kb_id,
         )
+    )
 
-    # ── Agent-KB 绑定 ───────────────────────────────────────
+
+def _bind_knowledge_base(
+    services: SeedServices,
+    agent: Agent,
+    knowledge_base: KnowledgeBase,
+) -> None:
     try:
-        agent_service.bind_knowledge_base(
+        services.agent.bind_knowledge_base(
             agent.id,
-            AgentKnowledgeBaseBind(knowledge_base_id=kb.id, priority=100),
+            AgentKnowledgeBaseBind(knowledge_base_id=knowledge_base.id, priority=100),
         )
-    except Exception:
-        db.rollback()
+    except ConflictError:
+        services.db.rollback()
 
-    # ── 权限策略 ─────────────────────────────────────────────
-    # 策略1：外部客户组织可 invoke Q&A Agent
-    policies = [
-        p for p in auth_service.list_permission_policies()
-        if (p.subject_type == SubjectType.ORG_UNIT
-            and p.subject_id == ext_org.id
-            and p.resource_type == ResourceType.AGENT
-            and p.resource_id == agent.id)
-    ]
-    if not policies:
-        auth_service.create_permission_policy(
-            PermissionPolicyCreate(
-                subject_type=SubjectType.ORG_UNIT,
-                subject_id=ext_org.id,
-                resource_type=ResourceType.AGENT,
-                resource_id=agent.id,
-                actions=["invoke"],
-                effect=PolicyEffect.ALLOW,
-            )
+
+def _ensure_permission(
+    services: SeedServices,
+    *,
+    subject_type: SubjectType,
+    subject_id: str,
+    resource_type: ResourceType,
+    resource_id: str,
+    actions: list[str],
+) -> None:
+    existing = next(
+        (
+            policy
+            for policy in services.auth.list_permission_policies()
+            if policy.subject_type == subject_type
+            and policy.subject_id == subject_id
+            and policy.resource_type == resource_type
+            and policy.resource_id == resource_id
+            and policy.effect == PolicyEffect.ALLOW
+            and set(actions).issubset(set(policy.actions or []))
+        ),
+        None,
+    )
+    if existing is not None:
+        return
+    services.auth.create_permission_policy(
+        PermissionPolicyCreate(
+            subject_type=subject_type,
+            subject_id=subject_id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            actions=actions,
+            effect=PolicyEffect.ALLOW,
         )
+    )
 
-    # 策略2：内部技术部仅可调用风控助手，不授予管理或外部访问权限。
-    risk_policies = [
-        p
-        for p in auth_service.list_permission_policies()
-        if (
-            p.subject_type == SubjectType.ORG_UNIT
-            and p.subject_id == admin_dept.id
-            and p.resource_type == ResourceType.AGENT
-            and p.resource_id == risk_agent.id
-        )
-    ]
-    if not risk_policies:
-        auth_service.create_permission_policy(
-            PermissionPolicyCreate(
-                subject_type=SubjectType.ORG_UNIT,
-                subject_id=admin_dept.id,
-                resource_type=ResourceType.AGENT,
-                resource_id=risk_agent.id,
-                actions=["invoke"],
-                effect=PolicyEffect.ALLOW,
-            )
-        )
 
-    # 策略3：管理员用户可 manage 所有 API 资源（管理端入口权限）
-    admin_policies = [
-        p for p in auth_service.list_permission_policies()
-        if (p.subject_type == SubjectType.USER
-            and p.subject_id == admin_user.id
-            and p.resource_type == ResourceType.API)
-    ]
-    if not admin_policies:
-        auth_service.create_permission_policy(
-            PermissionPolicyCreate(
-                subject_type=SubjectType.USER,
-                subject_id=admin_user.id,
-                resource_type=ResourceType.API,
-                resource_id="*",  # "*" 表示所有 API 资源
-                actions=["manage"],
-                effect=PolicyEffect.ALLOW,
-            )
-        )
+def print_seed_summary(
+    summary: SeedSummary,
+    *,
+    settings: Settings | None = None,
+) -> None:
+    resolved_settings = settings or get_settings()
+    is_production = resolved_settings.environment.strip().lower() in PRODUCTION_ENVIRONMENTS
 
-    phone = ext_user.phone_normalized
-    ext2_phone = ext2_user.phone_normalized
-    admin_phone = admin_user.phone_normalized
-    key_prefix = api_key_record.key_prefix
-    agent_code = agent.code
-    contract_review_agent_code = contract_review_agent.code
-    kb_name = kb.name
-    admin_prefix = admin_key_record.key_prefix
-
-    db.close()
-
-    print("种子数据创建完成。")
-    print("— 管理员（登录页账密登录，可访问管理端）—")
-    print(f"  管理员手机:      {admin_phone}")
-    print(f"  管理员密码:      {_SEED_ADMIN_PASSWORD}  (仅本地演示)")
-    if admin_key_raw:
-        print(f"  管理员 API Key (仅此一次): {admin_key_raw}")
+    print(f"{summary.profile.value} profile 种子数据创建完成。")
+    print(f"  管理员手机: {summary.admin_phone}")
+    if is_production:
+        print(f"  管理员 API Key 前缀: {summary.admin_key_prefix}...")
     else:
-        print(f"  管理员 API Key 前缀:    {admin_prefix}...")
-    print("— 外部客户 1（营销智能体测试）—")
-    print(f"  外部客户手机:    {phone}")
-    print(f"  外部客户密码:    {_SEED_EXT_PASSWORD}  (仅本地演示)")
-    if issued_raw_key:
-        print(f"  外部客户 API Key (仅此一次): {issued_raw_key}")
-    else:
-        print(f"  外部客户 API Key 前缀:    {key_prefix}...")
-    print("— 外部客户 2（营销智能体测试）—")
-    print(f"  外部客户手机:    {ext2_phone}")
-    print(f"  外部客户密码:    {_SEED_EXT2_PASSWORD}  (仅本地演示)")
-    print("— 其它 —")
-    print(f"  Agent code:      {agent_code}")
-    print(f"  合同审查 Agent:  {contract_review_agent_code}")
-    if _CONTRACT_REVIEW_DIFY_API_KEY == _SEED_PLACEHOLDER_DIFY_KEY:
-        print("  合同审查 Dify Key: 未配置（调用会失败）")
-    elif not _SETTINGS.contract_review_dify_api_key and _SETTINGS.contract_review_full_context_dify_api_key:
-        print("  合同审查 Dify Key: 使用全文实验 key 过渡回退")
-    else:
-        print("  合同审查 Dify Key: 已写入 Agent 配置快照")
-    print(f"  KB name:         {kb_name}")
+        print(f"  管理员密码: {os.getenv('SEED_ADMIN_PASSWORD', 'Admin8Pass')} (仅本地演示)")
+        if summary.admin_key_raw:
+            print(f"  管理员 API Key (仅此一次): {summary.admin_key_raw}")
+        else:
+            print(f"  管理员 API Key 前缀: {summary.admin_key_prefix}...")
+
+    if summary.profile == DeploymentProfile.EXTERNAL:
+        for index, phone in enumerate(summary.external_phones, start=1):
+            print(f"  外部客户 {index} 手机: {phone}")
+            if not is_production and index <= len(summary.external_passwords):
+                print(
+                    f"  外部客户 {index} 密码: {summary.external_passwords[index - 1]} (仅本地演示)"
+                )
+        if is_production or not summary.external_key_raw:
+            print(f"  外部客户 API Key 前缀: {summary.external_key_prefix}...")
+        else:
+            print(f"  外部客户 API Key (仅此一次): {summary.external_key_raw}")
+        if summary.knowledge_base_name:
+            print(f"  KB name: {summary.knowledge_base_name}")
+    elif summary.contract_review_key_configured is not None:
+        status = "已配置" if summary.contract_review_key_configured else "未配置（调用会失败）"
+        print(f"  合同审查 Dify Key: {status}")
+
+    print(f"  Agent codes: {', '.join(summary.agent_codes)}")
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Seed one AgentHub deployment profile.")
+    parser.add_argument(
+        "--profile",
+        choices=[profile.value for profile in DeploymentProfile],
+        help="目标profile；默认使用DEPLOYMENT_PROFILE，显式值必须与其一致。",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    settings = get_settings()
+    try:
+        summary = seed(args.profile, settings=settings)
+    except ValueError as exc:
+        print(f"种子数据初始化失败: {exc}", file=sys.stderr)
+        return 2
+    print_seed_summary(summary, settings=settings)
+    return 0
 
 
 if __name__ == "__main__":
-    seed()
+    raise SystemExit(main())

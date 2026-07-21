@@ -1,0 +1,17 @@
+/var/log/nginx/agenthub-external.access.log
+/var/log/nginx/agenthub-external.error.log
+/var/log/nginx/agenthub-internal.access.log
+/var/log/nginx/agenthub-internal.error.log
+{
+    daily
+    missingok
+    rotate 30
+    compress
+    delaycompress
+    notifempty
+    create 0640 www-data adm
+    sharedscripts
+    postrotate
+        [ -f /run/nginx.pid ] && kill -USR1 `cat /run/nginx.pid`
+    endscript
+}

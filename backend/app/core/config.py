@@ -21,6 +21,10 @@ INSECURE_EMBED_SECRET_VALUES = frozenset(
     }
 )
 INSECURE_EMBED_SECRET_MARKERS = ("change-me", "changeme", "dev-", "dev_", "example", "placeholder")
+EXTERNAL_AUTH_COOKIE_NAME = "agenthub_session"
+INTERNAL_AUTH_COOKIE_NAME = "agenthub_internal_session"
+EXTERNAL_EMBED_COOKIE_NAME = "agenthub_embed_session"
+INTERNAL_EMBED_COOKIE_NAME = "agenthub_internal_embed_session"
 
 
 class Settings(BaseSettings):
@@ -41,7 +45,7 @@ class Settings(BaseSettings):
     # 登录态配置
     auth_token_secret: str = Field(default="dev-auth-secret-change-me-please", min_length=32)
     auth_token_issuer: str = "agenthub"
-    auth_cookie_name: str = "agenthub_session"
+    auth_cookie_name: str = EXTERNAL_AUTH_COOKIE_NAME
     auth_cookie_secure: bool = False
     auth_cookie_samesite: str = "lax"
     auth_cookie_domain: str | None = None
@@ -58,7 +62,7 @@ class Settings(BaseSettings):
     embed_external_token_issuer: str = "industrial-internet-mock"
     embed_external_token_audience: str = "agenthub"
     embed_session_expire_minutes: int = 10
-    embed_session_cookie_name: str = "agenthub_embed_session"
+    embed_session_cookie_name: str = EXTERNAL_EMBED_COOKIE_NAME
     embed_cookie_secure: bool = False
     embed_cookie_samesite: str = "lax"
     embed_cookie_domain: str | None = None
@@ -79,9 +83,7 @@ class Settings(BaseSettings):
     risk_document_extraction_provider: str | None = None
     # 原始合同/页面图片会发送到外部云服务；只有完成审批后才允许显式开启。
     risk_document_cloud_egress_enabled: bool = False
-    risk_document_paddleocr_job_url: str = (
-        "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
-    )
+    risk_document_paddleocr_job_url: str = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
     risk_document_paddleocr_api_token: SecretStr | None = None
     risk_document_paddleocr_model: str = "PaddleOCR-VL-1.6"
     risk_document_paddleocr_result_hosts: str = "paddleocr-store-8.bj.bcebos.com"
@@ -137,11 +139,7 @@ class Settings(BaseSettings):
         """
         if not self.cors_allowed_origins:
             return []
-        return [
-            origin.strip()
-            for origin in self.cors_allowed_origins.split(",")
-            if origin.strip()
-        ]
+        return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
     @property
     def risk_document_paddleocr_result_host_list(self) -> list[str]:
@@ -152,12 +150,37 @@ class Settings(BaseSettings):
         ]
 
     @model_validator(mode="after")
-    def validate_production_secrets(self) -> "Settings":
+    def resolve_profile_defaults_and_validate(self) -> "Settings":
         """生产环境强校验关键密钥，禁止使用公开默认值或带占位标记的弱密钥。
 
         覆盖签发 API Key、登录 token 以及（启用嵌入时）产业互联网 embed 验签密钥，
         避免生产误用代码内置的开发默认值导致凭证可被伪造。
         """
+        if "auth_cookie_name" not in self.model_fields_set:
+            self.auth_cookie_name = (
+                INTERNAL_AUTH_COOKIE_NAME
+                if self.deployment_profile == DeploymentProfile.INTERNAL
+                else EXTERNAL_AUTH_COOKIE_NAME
+            )
+        self.auth_cookie_name = _validate_cookie_name("AUTH_COOKIE_NAME", self.auth_cookie_name)
+
+        if "embed_enabled" not in self.model_fields_set:
+            self.embed_enabled = self.deployment_profile == DeploymentProfile.EXTERNAL
+        if "embed_session_cookie_name" not in self.model_fields_set:
+            self.embed_session_cookie_name = (
+                INTERNAL_EMBED_COOKIE_NAME
+                if self.deployment_profile == DeploymentProfile.INTERNAL
+                else EXTERNAL_EMBED_COOKIE_NAME
+            )
+        self.embed_session_cookie_name = _validate_cookie_name(
+            "EMBED_SESSION_COOKIE_NAME",
+            self.embed_session_cookie_name,
+        )
+        if self.embed_enabled and self.embed_session_cookie_name == self.auth_cookie_name:
+            raise ValueError(
+                "EMBED_SESSION_COOKIE_NAME must differ from AUTH_COOKIE_NAME when embed is enabled"
+            )
+
         if self.environment.strip().lower() not in PRODUCTION_ENVIRONMENTS:
             return self
 
@@ -182,9 +205,17 @@ def _validate_production_secret(name: str, value: str) -> None:
         raise ValueError(f"{name} must be changed from the public development placeholder")
     if len(normalized) < PRODUCTION_EMBED_SECRET_MIN_LENGTH:
         raise ValueError(
-            f"{name} must be at least {PRODUCTION_EMBED_SECRET_MIN_LENGTH} characters "
-            "in production"
+            f"{name} must be at least {PRODUCTION_EMBED_SECRET_MIN_LENGTH} characters in production"
         )
     lowered = normalized.lower()
     if any(marker in lowered for marker in INSECURE_EMBED_SECRET_MARKERS):
         raise ValueError(f"{name} must not contain placeholder text in production")
+
+
+def _validate_cookie_name(name: str, value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{name} must not be empty")
+    if any(char in normalized for char in (";", ",", " ", "\t", "\r", "\n")):
+        raise ValueError(f"{name} contains invalid cookie-name characters")
+    return normalized

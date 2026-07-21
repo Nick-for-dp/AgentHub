@@ -1,0 +1,5 @@
+# Generated from INTERNAL_ALLOWED_CIDRS by deploy/scripts/render_nginx_allowlist.py.
+# Example only; replace with the narrow company LAN/VPN ranges approved for trial.
+# allow 10.20.30.0/24;
+# allow 192.168.50.10/32;
+# `deny all;` is intentionally kept in agenthub-single-host.conf.

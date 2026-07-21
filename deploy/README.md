@@ -6,6 +6,8 @@
 > ⚠️ **严肃提醒**：所有真实密钥（MySQL 口令、Dify API Key、火山引擎 Key、AUTH_TOKEN_SECRET 等）
 > **只能在服务器上手敲填进 `.env`**，绝不允许出现在 git 仓库、聊天记录、运维群里。Agent.md 第 5/7 节是铁律。
 
+> **部署模式选择**：本文件后续章节保留原有“单一 external 实例”部署方式。若要在同一服务器同时提供 external 营销智能体与 internal 合同审查/风控智能体，请以 [`single-host-dual-profile.md`](single-host-dual-profile.md) 为唯一操作手册；不要混用本文件的单实例 systemd unit、Nginx 配置和共享 `frontend/dist`。
+
 ---
 
 ## 0. 拓扑速览
