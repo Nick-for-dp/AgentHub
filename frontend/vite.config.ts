@@ -8,8 +8,12 @@ export default defineConfig(({ mode }) => {
   const apiHost = env.VITE_API_HOST || '127.0.0.1'
   const apiPort = env.VITE_API_PORT || '8240'
   const proxyTarget = env.VITE_API_PROXY_TARGET || `http://${apiHost}:${apiPort}`
+  const isInternalBuild = env.VITE_DEPLOYMENT_PROFILE?.trim().toLowerCase() === 'internal'
   return {
     plugins: [vue()],
+    define: {
+      __INTERNAL_BUILD__: JSON.stringify(isInternalBuild),
+    },
     server: {
       host: devHost,
       port: devPort,

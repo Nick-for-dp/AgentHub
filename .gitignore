@@ -96,6 +96,9 @@ pnpm-debug.log*
 tmp/
 temp/
 
+# Local QA reports, screenshots, temporary databases, and generated workbooks
+artifacts/
+
 # Local-only integration tools
 devtools/
 

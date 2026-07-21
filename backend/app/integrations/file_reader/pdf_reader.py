@@ -6,8 +6,17 @@ from app.integrations.file_reader.structure.schema import (
     ParsedDocumentV1,
     ParsedMetadata,
     SourceLocation,
+    StructureWarning,
     StyleFeatures,
 )
+
+
+SCAN_WATERMARK_MARKERS = (
+    "扫描全能王",
+    "camscanner",
+    "scanned with camscanner",
+)
+MIN_USEFUL_PAGE_CHARACTERS = 20
 
 
 class PdfReader:
@@ -59,6 +68,7 @@ class PdfReader:
             raise FileReaderDependencyError("pymupdf is required for .pdf parsing") from exc
 
         blocks: list[ParsedBlock] = []
+        warnings: list[StructureWarning] = []
         paragraph_count = 0
         with fitz.open(str(source.path)) as document:
             page_count = document.page_count
@@ -66,9 +76,22 @@ class PdfReader:
                 page_blocks = page.get_text("blocks")
                 # PyMuPDF 块的默认顺序不总是阅读顺序，先按页面坐标粗排一遍。
                 page_blocks.sort(key=lambda item: (item[1], item[0]))
+                page_texts = [" ".join((item[4] or "").split()) for item in page_blocks]
+                if _is_low_quality_page_text(page_texts):
+                    warnings.append(
+                        StructureWarning(
+                            code="SCANNED_TEXT_UNAVAILABLE",
+                            message=(
+                                f"第 {page_index} 页没有足够的有效文本层，"
+                                "后续字段抽取需要读取原始页面。"
+                            ),
+                            severity="warning",
+                        )
+                    )
+                    continue
                 for raw_block in page_blocks:
                     text = " ".join((raw_block[4] or "").split())
-                    if not text:
+                    if not text or _is_scan_watermark(text):
                         continue
                     paragraph_count += 1
                     x0, y0, x1, y1 = raw_block[:4]
@@ -99,5 +122,22 @@ class PdfReader:
                 page_count=page_count,
             ),
             blocks=blocks,
+            warnings=warnings,
         )
         return DocumentStructureAnalyzer().analyze(parsed)
+
+
+def _is_low_quality_page_text(texts: list[str]) -> bool:
+    """判断 PDF 页文本层是否不足以作为合同正文。
+
+    扫描软件通常只留下水印字符串；这些字符不能让扫描页被误判为文本 PDF。
+    一期采用保守字符数阈值，低质量页保留 warning，字段抽取阶段再读取原文件。
+    """
+    useful_text = " ".join(text for text in texts if text and not _is_scan_watermark(text))
+    useful_characters = sum(1 for char in useful_text if char.isalnum() or "\u4e00" <= char <= "\u9fff")
+    return useful_characters < MIN_USEFUL_PAGE_CHARACTERS
+
+
+def _is_scan_watermark(text: str) -> bool:
+    normalized = " ".join(text.lower().split())
+    return any(marker in normalized for marker in SCAN_WATERMARK_MARKERS)

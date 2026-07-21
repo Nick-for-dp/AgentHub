@@ -30,6 +30,7 @@ class FileParseTask(IDMixin, TimestampMixin, Base):
     created_by: Mapped[str | None] = mapped_column(ForeignKey("user_account.id"), nullable=True)
     api_key_id: Mapped[str | None] = mapped_column(ForeignKey("api_key.id"), nullable=True)
     source_uri: Mapped[str] = mapped_column(String(500), nullable=False)
+    original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_type: Mapped[str] = mapped_column(String(32), nullable=False)
     reader_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(

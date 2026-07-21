@@ -181,7 +181,11 @@ export function useContractReviewWorkbench(options: WorkbenchOptions = {}) {
       uploadOperation = null
 
       phase.value = 'parsing'
-      const parseTask = await client.createFileParseTask(upload.storage_uri, { signal: currentSignal() })
+      const parseTask = await client.createFileParseTask(
+        upload.storage_uri,
+        upload.original_filename,
+        { signal: currentSignal() },
+      )
       ensureActive(currentRunId)
       fileParseTask.value = await waitForFileParseTerminal(parseTask, currentRunId)
       assertSucceeded(fileParseTask.value.status, fileParseTask.value.error_message, '文件解析')

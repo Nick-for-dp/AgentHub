@@ -1,7 +1,7 @@
 import os
 import tempfile
 from datetime import datetime, timezone
-from pathlib import PurePosixPath
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Awaitable, Callable
 
 from sqlalchemy.orm import Session
@@ -17,7 +17,7 @@ from app.modules.file_parse.schemas import FileParseTaskCreate
 
 FILE_PARSE_CREATE_SCOPE = "file:parse:create"
 FILE_PARSE_READ_SCOPE = "file:parse:read"
-SUPPORTED_PARSE_FILE_TYPES = frozenset({"docx", "pdf"})
+SUPPORTED_PARSE_FILE_TYPES = frozenset({"docx", "pdf", "png", "jpg", "jpeg"})
 
 
 class FileParseService:
@@ -58,11 +58,16 @@ class FileParseService:
         self._assert_scope(subject, FILE_PARSE_CREATE_SCOPE, "create file parse task")
         bucket, object_key = parse_storage_uri(payload.source_uri)
         file_type = self._extract_supported_file_type(object_key)
+        original_filename = self._normalize_original_filename(
+            payload.original_filename,
+            expected_file_type=file_type,
+        )
         task = FileParseTask(
             owner_org_unit_id=subject.org_unit_id,
             created_by=subject.user_id,
             api_key_id=subject.api_key_id,
             source_uri=payload.source_uri,
+            original_filename=original_filename,
             file_type=file_type,
             status=FileParseTaskStatus.PENDING,
         )
@@ -132,6 +137,7 @@ class FileParseService:
             content = self.storage.download_bytes(bucket=bucket, object_key=object_key)
             temp_path = self._write_temp_file(content, task.file_type)
             parsed_document = await self.parser(temp_path)
+            parsed_document.metadata.filename = task.original_filename or parsed_document.metadata.filename
             task.reader_type = parsed_document.metadata.reader_type
             task.result_snapshot = parsed_document.to_dict()
             task.status = FileParseTaskStatus.SUCCEEDED
@@ -184,9 +190,23 @@ class FileParseService:
         suffix = PurePosixPath(object_key).suffix.lower().lstrip(".")
         if suffix not in SUPPORTED_PARSE_FILE_TYPES:
             raise BadRequestError(
-                "unsupported parse file type; supported types: docx, pdf"
+                "unsupported parse file type; supported types: docx, pdf, png, jpg, jpeg"
             )
         return suffix
+
+    @staticmethod
+    def _normalize_original_filename(value: str, *, expected_file_type: str) -> str:
+        """只保留客户端文件 basename，并校验扩展名与存储对象一致。"""
+        normalized = value.strip().replace("\x00", "")
+        filename = PureWindowsPath(normalized).name.strip()
+        if not filename or filename in {".", ".."}:
+            raise BadRequestError("original filename is required")
+        if len(filename) > 255:
+            raise BadRequestError("original filename is too long")
+        suffix = PureWindowsPath(filename).suffix.lower().lstrip(".")
+        if suffix != expected_file_type:
+            raise BadRequestError("original filename type does not match source object type")
+        return filename
 
     @staticmethod
     def _write_temp_file(content: bytes, file_type: str) -> str:

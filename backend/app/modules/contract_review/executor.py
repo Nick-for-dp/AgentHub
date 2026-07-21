@@ -1,7 +1,7 @@
-"""合同审查执行兼容门面：唯一实现仍是 TaskHandler 模板流水线。
+"""合同审查执行门面：委托 TaskHandler 流水线。
 
-endpoint 已直接使用 TaskHandlerRegistry。本门面只供现有 worker/脚本复用相同入口，
-不包含第二份 execute 实现。
+保留模块路径 ``executor`` 以便过渡；唯一执行实现为
+``ContractReviewTaskHandler``（preprocess → core → postprocess）。
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from app.modules.contract_review.service import ContractReviewService
 
 
 class ContractReviewExecutionService:
-    """为 worker/脚本保留的薄门面，委托 registry 选择并执行 TaskHandler。"""
+    """兼容门面：加载任务与 Agent 后交给 TaskHandlerRegistry / ContractReviewTaskHandler。"""
 
     def __init__(
         self,
@@ -35,6 +35,7 @@ class ContractReviewExecutionService:
         registry: TaskHandlerRegistry | None = None,
     ) -> None:
         self.db = db
+        self.agent_service = AgentService(db)
         self.runtime_service = runtime_service or AgentRuntimeService()
         if registry is not None:
             self.registry = registry
@@ -57,17 +58,17 @@ class ContractReviewExecutionService:
         subject: AuthenticatedSubject,
         request_id: str | None = None,
     ) -> ContractReviewTask:
-        """校验归属、加载 Agent，再委托 TaskHandlerRegistry 执行。"""
+        """执行一条待处理合同审查任务（经 TaskHandler 流水线）。"""
         task = ContractReviewService(self.db).get_task(task_id=task_id, subject=subject)
-        agent = AgentService(self.db).get_agent_by_code(task.agent_code)
+        agent = self.agent_service.get_agent_by_code(task.agent_code)
         handler = self.registry.select(agent)
-        return await handler.execute(
-            TaskContext(
-                db=self.db,
-                subject=subject,
-                task_id=task_id,
-                agent=agent,
-                runtime_service=self.runtime_service,
-                request_id=request_id,
-            )
+
+        ctx = TaskContext(
+            db=self.db,
+            subject=subject,
+            task_id=task_id,
+            agent=agent,
+            runtime_service=self.runtime_service,
+            request_id=request_id,
         )
+        return await handler.execute(ctx)

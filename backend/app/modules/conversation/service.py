@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from app.core.enums import (
     ConversationMessageRole,
-    ConversationMessageStatus,
     ConversationStatus,
     ProviderType,
 )

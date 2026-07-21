@@ -12,9 +12,11 @@ class FileParseTaskCreate(BaseModel):
     Args:
         source_uri: 上传接口返回的对象存储 URI，例如
             ``minio://int-agenthub-raw/uploads/org/2026/06/29/xxx.docx``。
+        original_filename: 用户上传时的原始文件名；服务端只保存 basename。
     """
 
     source_uri: str = Field(min_length=1, max_length=500)
+    original_filename: str = Field(min_length=1, max_length=255)
 
 
 class FileParseTaskRead(BaseModel):
@@ -27,6 +29,7 @@ class FileParseTaskRead(BaseModel):
     created_by: str | None
     api_key_id: str | None
     source_uri: str
+    original_filename: str | None = None
     file_type: str
     reader_type: str | None
     status: FileParseTaskStatus

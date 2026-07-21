@@ -28,6 +28,7 @@ function createParseTask(status: FileParseTask['status'] = 'SUCCEEDED'): FilePar
   return {
     id: 'parse-1',
     source_uri: 'minio://int-agenthub-raw/uploads/test.pdf',
+    original_filename: 'test.pdf',
     file_type: 'pdf',
     status,
     result_snapshot: { blocks: [] },
@@ -106,8 +107,9 @@ describe('useContractReviewWorkbench', () => {
         calls.push('upload')
         return { promise: Promise.resolve(), cancel: vi.fn() }
       },
-      createFileParseTask: async () => {
+      createFileParseTask: async (_sourceUri, originalFilename) => {
         calls.push('parse')
+        expect(originalFilename).toBe('test.pdf')
         return createParseTask()
       },
       createContractReviewTask: async () => {

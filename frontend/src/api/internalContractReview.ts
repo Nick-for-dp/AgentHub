@@ -1,11 +1,55 @@
 import axios from 'axios'
 
 import { http } from './http'
+import {
+  InternalFileApiError,
+  createFileParseTask,
+  getFileParseTask,
+  isTerminalTaskStatus,
+  isUncertainRequestError,
+  prepareFileUpload,
+  uploadToPresignedUrl,
+  DEFAULT_POLL_INITIAL_INTERVAL_MS,
+  DEFAULT_POLL_MAX_INTERVAL_MS,
+  DEFAULT_POLL_TIMEOUT_MS,
+} from './internalFiles'
+import type {
+  FileParseTask,
+  FileUploadPrepareResponse,
+  InternalTaskStatus,
+  ParsedDocumentBlock,
+  ParsedDocumentSection,
+  ParsedDocumentSnapshot,
+  RequestOptions,
+  UploadFileOptions,
+  UploadOperation,
+} from './internalFiles'
 import type { APIResponse } from './types'
+
+export type {
+  FileParseTask,
+  FileUploadPrepareResponse,
+  InternalTaskStatus,
+  ParsedDocumentBlock,
+  ParsedDocumentSection,
+  ParsedDocumentSnapshot,
+  RequestOptions,
+  UploadFileOptions,
+  UploadOperation,
+}
+export {
+  createFileParseTask,
+  getFileParseTask,
+  isTerminalTaskStatus,
+  prepareFileUpload,
+  uploadToPresignedUrl,
+  DEFAULT_POLL_INITIAL_INTERVAL_MS,
+  DEFAULT_POLL_MAX_INTERVAL_MS,
+  DEFAULT_POLL_TIMEOUT_MS,
+}
 
 export type ContractType = 'warehouse' | 'transport'
 export type CounterpartyLevel = 'A1' | 'A2' | 'A3' | 'A4' | 'A5' | 'A6' | 'A7'
-export type InternalTaskStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED'
 
 export interface ReviewWarning {
   code?: string
@@ -13,58 +57,6 @@ export interface ReviewWarning {
   severity?: string
   block_id?: string | null
   [key: string]: unknown
-}
-
-export interface ParsedDocumentBlock {
-  id: string
-  kind: string
-  text: string
-  order: number
-  source_location?: {
-    page_number?: number | null
-  }
-}
-
-export interface ParsedDocumentSection {
-  id: string
-  title: string
-  block_ids: string[]
-}
-
-export interface ParsedDocumentSnapshot {
-  metadata?: Record<string, unknown>
-  blocks?: ParsedDocumentBlock[]
-  sections?: ParsedDocumentSection[]
-  warnings?: ReviewWarning[]
-}
-
-export interface FileUploadPrepareResponse {
-  upload_url: string
-  method: string
-  headers: Record<string, string>
-  storage_uri: string
-  bucket: string
-  object_key: string
-  original_filename: string
-  file_type: string
-  content_type: string
-  expires_seconds: number
-}
-
-export interface FileParseTask {
-  id: string
-  owner_org_unit_id?: string | null
-  created_by?: string | null
-  api_key_id?: string | null
-  source_uri: string
-  file_type: string
-  reader_type?: string | null
-  status: InternalTaskStatus
-  result_snapshot?: ParsedDocumentSnapshot | null
-  error_message?: string | null
-  created_at: string
-  updated_at: string
-  finished_at?: string | null
 }
 
 export interface ContractClauseSource {
@@ -141,19 +133,6 @@ export interface CreateContractReviewTaskPayload {
   callback_metadata?: Record<string, unknown>
 }
 
-export interface UploadOperation {
-  promise: Promise<void>
-  cancel: () => void
-}
-
-export interface UploadFileOptions {
-  onProgress?: (percent: number) => void
-}
-
-export interface RequestOptions {
-  signal?: AbortSignal
-}
-
 export interface ExecuteOptions extends RequestOptions {
   timeout?: number
 }
@@ -162,104 +141,6 @@ export const DEFAULT_EXECUTE_TIMEOUT_MS = resolvePositiveNumber(
   import.meta.env.VITE_CONTRACT_REVIEW_EXECUTE_TIMEOUT_MS,
   10 * 60 * 1000,
 )
-
-export const DEFAULT_POLL_TIMEOUT_MS = 12 * 60 * 1000
-export const DEFAULT_POLL_INITIAL_INTERVAL_MS = 1_500
-export const DEFAULT_POLL_MAX_INTERVAL_MS = 5_000
-
-export const terminalTaskStatuses = new Set<InternalTaskStatus>([
-  'SUCCEEDED',
-  'FAILED',
-  'CANCELLED',
-])
-
-export function isTerminalTaskStatus(status: InternalTaskStatus): boolean {
-  return terminalTaskStatuses.has(status)
-}
-
-export async function prepareFileUpload(
-  file: File,
-  options: RequestOptions = {},
-): Promise<FileUploadPrepareResponse> {
-  const { data } = await http.post<APIResponse<FileUploadPrepareResponse>>(
-    '/internal/files/upload',
-    {
-      filename: file.name,
-      content_type: file.type || undefined,
-      file_size_bytes: file.size || undefined,
-    },
-    { signal: options.signal },
-  )
-  return data.data
-}
-
-export function uploadToPresignedUrl(
-  upload: FileUploadPrepareResponse,
-  file: File,
-  options: UploadFileOptions = {},
-): UploadOperation {
-  const xhr = new XMLHttpRequest()
-  let cancelled = false
-
-  const promise = new Promise<void>((resolve, reject) => {
-    xhr.open(upload.method || 'PUT', upload.upload_url, true)
-    xhr.withCredentials = false
-
-    for (const [name, value] of Object.entries(upload.headers || {})) {
-      xhr.setRequestHeader(name, value)
-    }
-
-    xhr.upload.onprogress = (event) => {
-      if (!event.lengthComputable) return
-      options.onProgress?.(Math.min(100, Math.round((event.loaded / event.total) * 100)))
-    }
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        options.onProgress?.(100)
-        resolve()
-        return
-      }
-      reject(new ContractReviewApiError('对象上传失败，请检查文件或 MinIO CORS 配置。'))
-    }
-    xhr.onerror = () => reject(new ContractReviewApiError('对象上传网络错误，请稍后重试。'))
-    xhr.onabort = () => {
-      reject(new ContractReviewApiError(cancelled ? '已停止等待文件上传。' : '文件上传已中断。', 'ABORTED'))
-    }
-    xhr.send(file)
-  })
-
-  return {
-    promise,
-    cancel: () => {
-      cancelled = true
-      xhr.abort()
-    },
-  }
-}
-
-export async function createFileParseTask(
-  sourceUri: string,
-  options: RequestOptions = {},
-): Promise<FileParseTask> {
-  const { data } = await http.post<APIResponse<FileParseTask>>(
-    '/internal/file-parse/tasks',
-    { source_uri: sourceUri },
-    { signal: options.signal },
-  )
-  return data.data
-}
-
-export async function getFileParseTask(
-  taskId: string,
-  options: RequestOptions = {},
-): Promise<FileParseTask> {
-  const { data } = await http.get<APIResponse<FileParseTask>>(
-    `/internal/file-parse/tasks/${encodeURIComponent(taskId)}`,
-    { signal: options.signal },
-  )
-  return data.data
-}
 
 export async function createContractReviewTask(
   payload: CreateContractReviewTaskPayload,
@@ -327,7 +208,9 @@ export class ContractReviewApiError extends Error {
 }
 
 export function toSafeContractReviewErrorMessage(error: unknown): string {
-  if (error instanceof ContractReviewApiError) return error.message
+  if (error instanceof ContractReviewApiError || error instanceof InternalFileApiError) {
+    return error.message
+  }
   if (axios.isAxiosError(error)) {
     if (error.code === 'ERR_CANCELED') return '请求已停止。'
     if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
@@ -340,10 +223,7 @@ export function toSafeContractReviewErrorMessage(error: unknown): string {
 }
 
 export function isUncertainExecutionError(error: unknown): boolean {
-  if (axios.isAxiosError(error)) {
-    return !error.response || error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT'
-  }
-  return false
+  return isUncertainRequestError(error)
 }
 
 function readResponseMessage(payload: unknown): string | null {

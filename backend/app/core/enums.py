@@ -62,6 +62,7 @@ class PolicyEffect(StrEnum):
 class AgentType(StrEnum):
     QA = "QA"
     CONTRACT_REVIEW = "CONTRACT_REVIEW"
+    RISK_ASSISTANT = "RISK_ASSISTANT"
     REPORT_EXTRACTION = "REPORT_EXTRACTION"
     DOCUMENT_WRITING = "DOCUMENT_WRITING"
 
@@ -112,6 +113,26 @@ class ContractReviewTaskStatus(StrEnum):
     CANCELLED = "CANCELLED"
 
 
+class RiskAssessmentTaskStatus(StrEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    WAITING_REVIEW = "WAITING_REVIEW"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class DocumentTypeValidationStatus(StrEnum):
+    MATCHED = "MATCHED"
+    SUSPECTED = "SUSPECTED"
+    UNVERIFIED = "UNVERIFIED"
+
+
+class RiskReviewTargetKind(StrEnum):
+    FIELD = "FIELD"
+    DOCUMENT_TYPE = "DOCUMENT_TYPE"
+
+
 class CounterpartyLevel(StrEnum):
     A1 = "A1"
     A2 = "A2"
@@ -156,6 +177,7 @@ class CallerType(StrEnum):
 class OperationType(StrEnum):
     QA = "QA"
     CONTRACT_REVIEW = "CONTRACT_REVIEW"
+    RISK_ASSESSMENT = "RISK_ASSESSMENT"
     REPORT_EXTRACTION = "REPORT_EXTRACTION"
     DOCUMENT_WRITING = "DOCUMENT_WRITING"
 

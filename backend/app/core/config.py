@@ -1,6 +1,7 @@
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.enums import DeploymentProfile
@@ -73,6 +74,21 @@ class Settings(BaseSettings):
     # 兼容昨天全文实验 workflow 的本地配置；正式配置为空时 seed 可临时回退使用。
     contract_review_full_context_dify_api_key: str | None = None
     contract_review_block_loop_dify_api_key: str | None = None
+    # 风控文档抽取：PaddleOCR 负责解析/位置，Qwen 负责语义字段选择。
+    # 是否允许具体 Agent 调用由任务 handler 按 visibility/主体权限判断，不依赖部署 profile。
+    risk_document_extraction_provider: str | None = None
+    # 原始合同/页面图片会发送到外部云服务；只有完成审批后才允许显式开启。
+    risk_document_cloud_egress_enabled: bool = False
+    risk_document_paddleocr_job_url: str = (
+        "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
+    )
+    risk_document_paddleocr_api_token: SecretStr | None = None
+    risk_document_paddleocr_model: str = "PaddleOCR-VL-1.6"
+    risk_document_paddleocr_result_hosts: str = "paddleocr-store-8.bj.bcebos.com"
+    risk_document_qwen_base_url: str | None = None
+    risk_document_qwen_api_key: SecretStr | None = None
+    risk_document_qwen_model: str = "qwen3.7-plus"
+    risk_document_qwen_input_mode: Literal["ocr_text", "image_and_ocr"] = "ocr_text"
     # MinIO / S3 兼容对象存储配置
     object_storage_endpoint: str | None = None
     object_storage_access_key: str | None = None
@@ -125,6 +141,14 @@ class Settings(BaseSettings):
             origin.strip()
             for origin in self.cors_allowed_origins.split(",")
             if origin.strip()
+        ]
+
+    @property
+    def risk_document_paddleocr_result_host_list(self) -> list[str]:
+        return [
+            host.strip().lower()
+            for host in self.risk_document_paddleocr_result_hosts.split(",")
+            if host.strip()
         ]
 
     @model_validator(mode="after")

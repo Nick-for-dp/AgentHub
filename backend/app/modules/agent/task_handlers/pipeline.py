@@ -72,6 +72,31 @@ class PostprocessResult:
         )
 
 
+@dataclass
+class SuspendedResult:
+    """任务进入非终态等待时的业务和审计素材。"""
+
+    reason: str
+    business_result: dict[str, Any] = field(default_factory=dict)
+    snapshot_runtime_extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ExecutionOutcome:
+    """兼容终态和暂停态的统一执行结果。"""
+
+    postprocess: PostprocessResult | None = None
+    suspended: SuspendedResult | None = None
+
+    def __post_init__(self) -> None:
+        if (self.postprocess is None) == (self.suspended is None):
+            raise ValueError("execution outcome requires exactly one result")
+
+    @property
+    def is_suspended(self) -> bool:
+        return self.suspended is not None
+
+
 class TaskPreprocessStep(Protocol):
     """前处理步骤协议。多个实现按声明顺序串联。"""
 

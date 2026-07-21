@@ -2,6 +2,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from app.integrations.file_reader.base import FileSource
+from app.integrations.file_reader.docx_table import table_text_and_metadata
 from app.integrations.file_reader.errors import FileReaderDependencyError, FileReaderError
 from app.integrations.file_reader.structure import DocumentStructureAnalyzer
 from app.integrations.file_reader.structure.schema import (
@@ -85,7 +86,7 @@ class DocxReader:
                 )
             elif item_type == "table":
                 table_count += 1
-                text, metadata = _table_text_and_metadata(value)
+                text, metadata = table_text_and_metadata(value)
                 if not text:
                     continue
                 blocks.append(
@@ -217,27 +218,3 @@ def _most_common_size(values: list[float]) -> float | None:
     if not values:
         return None
     return max(set[float](values), key=values.count)
-
-
-def _table_text_and_metadata(table: Any) -> tuple[str, dict[str, Any]]:
-    """把表格转成文本和结构化 metadata。
-
-    Args:
-        table: python-docx 的 ``Table`` 对象。
-
-    Returns:
-        二元组：第一项是用 ``|`` 连接的表格文本，第二项是包含 ``rows``、
-        ``cols``、``cells`` 的 metadata。
-
-    Processing:
-        1. 逐行读取 cell 文本并压缩空白字符。
-        2. 生成适合 LLM 检索的行文本。
-        3. 保留原始二维 cell 网格，便于后续字段抽取或前端复核。
-    """
-    rows: list[list[str]] = []
-    for row in table.rows:
-        rows.append([" ".join(cell.text.split()) for cell in row.cells])
-    lines = [" | ".join(cell for cell in row if cell) for row in rows]
-    text = "\n".join(line for line in lines if line)
-    col_count = max((len(row) for row in rows), default=0)
-    return text, {"rows": len(rows), "cols": col_count, "cells": rows}

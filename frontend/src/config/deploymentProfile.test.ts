@@ -13,6 +13,8 @@ describe('deployment profile', () => {
   it('does not register the internal workbench route for external builds', () => {
     const routes = createAppRoutes('external')
     expect(routes.some((route) => route.path === '/internal')).toBe(false)
+    expect(JSON.stringify(routes)).not.toContain('risk-assistant')
+    expect(JSON.stringify(routes)).not.toContain('RiskAssistantPage')
     expect(getDefaultHomePath(false, 'external')).toBe('/chat')
   })
 
@@ -20,6 +22,9 @@ describe('deployment profile', () => {
     const route = createAppRoutes('internal').find((item) => item.path === '/internal')
     expect(route?.meta?.requiresAuth).toBe(true)
     expect(route?.children?.some((item) => item.path === 'contract-review')).toBe(true)
+    expect(route?.children?.some((item) => item.path === 'risk-assistant')).toBe(true)
+    const detail = route?.children?.find((item) => item.path === 'risk-assistant/tasks/:taskId')
+    expect(detail?.props).toBe(true)
     expect(getDefaultHomePath(false, 'internal')).toBe('/internal/contract-review')
     expect(getDefaultHomePath(true, 'internal')).toBe('/admin/agents')
   })

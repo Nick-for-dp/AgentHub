@@ -31,6 +31,10 @@ def get_file_reader(file_type: str) -> FileReader:
         from app.integrations.file_reader.pdf_reader import PdfReader
 
         return PdfReader()
+    if normalized in {"png", "jpg", "jpeg"}:
+        from app.integrations.file_reader.image_reader import ImageReader
+
+        return ImageReader()
     if normalized == "doc":
         raise FileReaderError("legacy .doc requires LibreOffice conversion before parsing")
     raise FileReaderError(f"unsupported file type: {file_type}")

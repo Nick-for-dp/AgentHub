@@ -5,8 +5,6 @@
 """
 
 from datetime import date, datetime, timedelta
-from typing import Sequence
-
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 

@@ -289,6 +289,47 @@ def seed() -> None:
         db.commit()
         db.refresh(contract_review_agent)
 
+    # ── 风控助手 Agent ───────────────────────────────────────
+    risk_agents = [a for a in agent_service.list_agents() if a.code == "risk-assistant"]
+    if risk_agents:
+        risk_agent = risk_agents[0]
+        risk_agent.name = "风控助手 Agent"
+        risk_agent.type = AgentType.RISK_ASSISTANT
+        risk_agent.description = "内部供应链合同事实核对、确定性规则与人工复核"
+        risk_agent.owner_org_unit_id = admin_dept.id
+        risk_agent.runtime_type = RuntimeType.CUSTOM
+        risk_agent.runtime_app_id = "risk-assessment-langgraph"
+        risk_agent.publish_status = PublishStatus.PUBLISHED
+        risk_agent.visibility = Visibility.INTERNAL
+        risk_agent.config_snapshot = {
+            "graph": "risk-assessment-graph",
+            "schema_version": "risk-graph-v1",
+        }
+        db.add(risk_agent)
+        db.commit()
+        db.refresh(risk_agent)
+    else:
+        risk_agent = agent_service.create_agent(
+            AgentCreate(
+                code="risk-assistant",
+                name="风控助手 Agent",
+                type=AgentType.RISK_ASSISTANT,
+                description="内部供应链合同事实核对、确定性规则与人工复核",
+                owner_org_unit_id=admin_dept.id,
+                runtime_type=RuntimeType.CUSTOM,
+                runtime_app_id="risk-assessment-langgraph",
+                visibility=Visibility.INTERNAL,
+                config_snapshot={
+                    "graph": "risk-assessment-graph",
+                    "schema_version": "risk-graph-v1",
+                },
+            )
+        )
+        risk_agent.publish_status = PublishStatus.PUBLISHED
+        db.add(risk_agent)
+        db.commit()
+        db.refresh(risk_agent)
+
     # ── 知识库 ──────────────────────────────────────────────
     kbs = [k for k in knowledge_service.list_knowledge_bases() if k.name == "MVP 知识库"]
     if kbs:
@@ -333,7 +374,30 @@ def seed() -> None:
             )
         )
 
-    # 策略2：管理员用户可 manage 所有 API 资源（管理端入口权限）
+    # 策略2：内部技术部仅可调用风控助手，不授予管理或外部访问权限。
+    risk_policies = [
+        p
+        for p in auth_service.list_permission_policies()
+        if (
+            p.subject_type == SubjectType.ORG_UNIT
+            and p.subject_id == admin_dept.id
+            and p.resource_type == ResourceType.AGENT
+            and p.resource_id == risk_agent.id
+        )
+    ]
+    if not risk_policies:
+        auth_service.create_permission_policy(
+            PermissionPolicyCreate(
+                subject_type=SubjectType.ORG_UNIT,
+                subject_id=admin_dept.id,
+                resource_type=ResourceType.AGENT,
+                resource_id=risk_agent.id,
+                actions=["invoke"],
+                effect=PolicyEffect.ALLOW,
+            )
+        )
+
+    # 策略3：管理员用户可 manage 所有 API 资源（管理端入口权限）
     admin_policies = [
         p for p in auth_service.list_permission_policies()
         if (p.subject_type == SubjectType.USER

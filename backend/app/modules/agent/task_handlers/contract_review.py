@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from time import perf_counter
 from uuid import uuid4
 
 from app.core.enums import (
@@ -33,6 +34,9 @@ from app.modules.agent.task_handlers.pipeline import (
     TaskCoreStep,
     TaskPostprocessStep,
     TaskPreprocessStep,
+    run_pipeline,
+    run_postprocess_steps,
+    run_preprocess_steps,
 )
 from app.modules.contract_review.models import ContractReviewTask
 from app.modules.contract_review.rules import CreditClauseRuleEngine
@@ -99,6 +103,48 @@ class ContractReviewTaskHandler(TaskHandler):
     @property
     def postprocess_steps(self) -> Sequence[TaskPostprocessStep]:
         return self._postprocess_steps
+
+    def preprocess(self, ctx: TaskContext) -> PreprocessResult:
+        """顺序执行全部前处理步骤。"""
+        return run_preprocess_steps(self.preprocess_steps, ctx)
+
+    async def core(self, ctx: TaskContext, pre: PreprocessResult) -> CoreResult:
+        """执行唯一核心处理步骤。"""
+        return await self.core_step.run(ctx, pre)
+
+    def postprocess(
+        self,
+        ctx: TaskContext,
+        pre: PreprocessResult,
+        core: CoreResult,
+    ) -> PostprocessResult:
+        """顺序执行全部后处理步骤。"""
+        return run_postprocess_steps(self.postprocess_steps, ctx, pre, core)
+
+    async def execute(self, ctx: TaskContext) -> ContractReviewTask:
+        """执行合同审查状态机与三阶段流水线。"""
+        self.prepare_execution(ctx)
+        self.begin_execution(ctx)
+        started_at = perf_counter()
+        try:
+            pre, core, post = await run_pipeline(
+                preprocess=self.preprocess,
+                core=self.core,
+                postprocess=self.postprocess,
+                ctx=ctx,
+            )
+        except Exception as exc:
+            latency_ms = int((perf_counter() - started_at) * 1000)
+            return self.finalize_failure(ctx, exc, latency_ms=latency_ms)
+
+        latency_ms = int((perf_counter() - started_at) * 1000)
+        return self.finalize_success(
+            ctx,
+            pre,
+            core,
+            post,
+            latency_ms=latency_ms,
+        )
 
     def prepare_execution(self, ctx: TaskContext) -> None:
         """在 runtime 前完成 scope、归属、PENDING 与 agent.type 校验。"""

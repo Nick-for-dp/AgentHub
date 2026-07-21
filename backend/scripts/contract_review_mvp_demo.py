@@ -168,7 +168,10 @@ async def run_single_contract(
         content_type=guess_content_type(file_path),
     )
     parse_task = await FileParseService(db, storage=storage).create_task(
-        payload=FileParseTaskCreate(source_uri=stored.storage_uri),
+        payload=FileParseTaskCreate(
+            source_uri=stored.storage_uri,
+            original_filename=file_path.name,
+        ),
         subject=subject,
     )
     review_task = ContractReviewService(db).create_task(

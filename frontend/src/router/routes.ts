@@ -59,21 +59,31 @@ export function createAppRoutes(profile: DeploymentProfile = deploymentProfile):
     },
   ]
 
-  if (profile === 'internal') {
+  if (__INTERNAL_BUILD__ && profile === 'internal') {
+    const internalChildren: RouteRecordRaw[] = [
+      {
+        path: '',
+        redirect: '/internal/contract-review',
+      },
+      {
+        path: 'contract-review',
+        component: () => import('../pages/internal/ContractReviewPage.vue'),
+      },
+      {
+        path: 'risk-assistant',
+        component: () => import('../pages/internal/RiskAssistantPage.vue'),
+      },
+      {
+        path: 'risk-assistant/tasks/:taskId',
+        component: () => import('../pages/internal/RiskAssistantPage.vue'),
+        props: true,
+      },
+    ]
     routes.push({
       path: '/internal',
       component: () => import('../layouts/InternalLayout.vue'),
       meta: { requiresAuth: true },
-      children: [
-        {
-          path: '',
-          redirect: '/internal/contract-review',
-        },
-        {
-          path: 'contract-review',
-          component: () => import('../pages/internal/ContractReviewPage.vue'),
-        },
-      ],
+      children: internalChildren,
     })
   }
 

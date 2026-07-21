@@ -17,7 +17,7 @@ from app.api.v1.endpoints import (
     permissions,
     users,
 )
-from app.api.v1.endpoints.internal import contract_review, file_parse, files
+from app.api.v1.endpoints.internal import contract_review, file_parse, files, risk_assistant
 from app.core.config import Settings, get_settings
 from app.core.enums import DeploymentProfile
 from app.modules.auth.dependencies import get_current_subject, require_admin_permission
@@ -135,6 +135,11 @@ def create_api_router(settings: Settings | None = None) -> APIRouter:
             contract_review.router,
             prefix="/internal/contract-review",
             tags=["internal-contract-review"],
+        )
+        router.include_router(
+            risk_assistant.router,
+            prefix="/internal/risk-assistant",
+            tags=["internal-risk-assistant"],
         )
 
     return router

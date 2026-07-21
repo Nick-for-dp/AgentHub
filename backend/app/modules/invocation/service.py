@@ -67,6 +67,35 @@ class InvocationService:
         self.db.refresh(record)
         return record
 
+    def update_pending_record(
+        self,
+        record_id: str,
+        *,
+        snapshot_runtime_extra: dict,
+        output: dict | None = None,
+    ) -> AgentInvocationRecord:
+        """更新等待中的 invocation，不写终态状态或 finished_at。"""
+        record = self.repository.get_record(record_id)
+        if record is None:
+            raise NotFoundError("invocation record not found")
+        snapshot = dict(record.snapshot or {})
+        runtime = dict(snapshot.get("runtime") or {})
+        runtime.update(snapshot_runtime_extra)
+        snapshot.update(
+            {
+                "retrieval": dict(snapshot.get("retrieval") or {}),
+                "model": dict(snapshot.get("model") or {}),
+                "runtime": runtime,
+            }
+        )
+        record.snapshot = snapshot
+        if output is not None:
+            record.output = output
+        self.db.add(record)
+        self.db.commit()
+        self.db.refresh(record)
+        return record
+
     def list_records(self, filters: InvocationRecordFilter) -> tuple[list[AgentInvocationRecord], int]:
         """按筛选条件分页查询调用记录。
 

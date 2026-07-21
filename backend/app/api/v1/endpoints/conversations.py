@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.enums import CallerType, ConversationStatus, ResourceType
+from app.core.enums import CallerType, ResourceType
 from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.responses import APIResponse, success
 from app.db.session import get_db
