@@ -50,6 +50,7 @@ export {
 
 export type ContractType = 'warehouse' | 'transport'
 export type CounterpartyLevel = 'A1' | 'A2' | 'A3' | 'A4' | 'A5' | 'A6' | 'A7'
+export type ContractReviewTaskStatus = Exclude<InternalTaskStatus, 'WAITING_REVIEW'>
 
 export interface ReviewWarning {
   code?: string
@@ -109,7 +110,7 @@ export interface ContractReviewTask {
   owner_org_unit_id?: string | null
   created_by?: string | null
   api_key_id?: string | null
-  status: InternalTaskStatus
+  status: ContractReviewTaskStatus
   agent_code: string
   file_parse_task_id: string
   contract_type: ContractType
@@ -122,6 +123,40 @@ export interface ContractReviewTask {
   created_at: string
   updated_at: string
   finished_at?: string | null
+}
+
+export interface ContractReviewTaskSummary {
+  id: string
+  original_filename?: string | null
+  status: ContractReviewTaskStatus
+  contract_type: ContractType
+  counterparty_level: CounterpartyLevel
+  total_clause_count: number
+  sensitive_clause_count: number
+  error_message?: string | null
+  created_at: string
+  updated_at: string
+  finished_at?: string | null
+}
+
+export interface ContractReviewTaskPage {
+  items: ContractReviewTaskSummary[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface ContractReviewTaskDeleteResult {
+  id: string
+  deleted_at: string
+}
+
+export interface ListContractReviewTasksOptions extends RequestOptions {
+  page?: number
+  pageSize?: number
+  status?: ContractReviewTaskStatus | null
+  contractType?: ContractType | null
+  keyword?: string | null
 }
 
 export interface CreateContractReviewTaskPayload {
@@ -141,6 +176,26 @@ export const DEFAULT_EXECUTE_TIMEOUT_MS = resolvePositiveNumber(
   import.meta.env.VITE_CONTRACT_REVIEW_EXECUTE_TIMEOUT_MS,
   10 * 60 * 1000,
 )
+
+export async function listContractReviewTasks(
+  options: ListContractReviewTasksOptions = {},
+): Promise<ContractReviewTaskPage> {
+  const keyword = options.keyword?.trim()
+  const { data } = await http.get<APIResponse<ContractReviewTaskPage>>(
+    '/internal/contract-review/tasks',
+    {
+      signal: options.signal,
+      params: {
+        page: options.page ?? 1,
+        page_size: options.pageSize ?? 20,
+        ...(options.status ? { status: options.status } : {}),
+        ...(options.contractType ? { contract_type: options.contractType } : {}),
+        ...(keyword ? { keyword } : {}),
+      },
+    },
+  )
+  return data.data
+}
 
 export async function createContractReviewTask(
   payload: CreateContractReviewTaskPayload,
@@ -180,14 +235,27 @@ export async function executeContractReviewTask(
   return data.data
 }
 
+export async function deleteContractReviewTask(
+  taskId: string,
+  options: RequestOptions = {},
+): Promise<ContractReviewTaskDeleteResult> {
+  const { data } = await http.delete<APIResponse<ContractReviewTaskDeleteResult>>(
+    `/internal/contract-review/tasks/${encodeURIComponent(taskId)}`,
+    { signal: options.signal },
+  )
+  return data.data
+}
+
 export interface ContractReviewClient {
   prepareFileUpload: typeof prepareFileUpload
   uploadToPresignedUrl: typeof uploadToPresignedUrl
   createFileParseTask: typeof createFileParseTask
   getFileParseTask: typeof getFileParseTask
+  listContractReviewTasks: typeof listContractReviewTasks
   createContractReviewTask: typeof createContractReviewTask
   getContractReviewTask: typeof getContractReviewTask
   executeContractReviewTask: typeof executeContractReviewTask
+  deleteContractReviewTask: typeof deleteContractReviewTask
 }
 
 export const contractReviewClient: ContractReviewClient = {
@@ -195,9 +263,11 @@ export const contractReviewClient: ContractReviewClient = {
   uploadToPresignedUrl,
   createFileParseTask,
   getFileParseTask,
+  listContractReviewTasks,
   createContractReviewTask,
   getContractReviewTask,
   executeContractReviewTask,
+  deleteContractReviewTask,
 }
 
 export class ContractReviewApiError extends Error {
@@ -213,6 +283,7 @@ export function toSafeContractReviewErrorMessage(error: unknown): string {
   }
   if (axios.isAxiosError(error)) {
     if (error.code === 'ERR_CANCELED') return '请求已停止。'
+    if (error.response?.status === 409) return '任务状态已变化，当前操作无法完成，请刷新后重试。'
     if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
       return '请求等待超时，正在确认合同审查任务状态。'
     }

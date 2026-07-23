@@ -39,6 +39,7 @@ log "backup started for profile=${profile}"
 
 mysqldump \
     --defaults-extra-file="$mysql_cnf" \
+    --no-tablespaces \
     --single-transaction \
     --quick \
     --routines \

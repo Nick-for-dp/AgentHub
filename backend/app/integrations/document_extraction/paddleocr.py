@@ -13,6 +13,7 @@ from app.integrations.document_extraction.schemas import OcrBlock, OcrDocument
 
 
 _SAFE_JOB_ID = re.compile(r"[A-Za-z0-9._-]{1,200}")
+_SAFE_HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 
 
 class PaddleOcrClient:
@@ -138,9 +139,12 @@ class PaddleOcrClient:
         hostname = (parsed.hostname or "").lower()
         if parsed.scheme.lower() != "https" or not hostname:
             raise DocumentExtractionIntegrationError("PaddleOCR result URL must use HTTPS")
-        if hostname not in self.allowed_result_hosts:
+        if not any(
+            _hostname_matches_pattern(hostname, pattern)
+            for pattern in self.allowed_result_hosts
+        ):
             raise DocumentExtractionIntegrationError(
-                "PaddleOCR result URL host is not allowed"
+                f"PaddleOCR result URL host is not allowed: {hostname}"
             )
 
     async def _download_result(
@@ -177,6 +181,25 @@ def _json_object(response: httpx.Response, operation: str) -> dict:
     if not isinstance(payload, dict):
         raise DocumentExtractionIntegrationError(f"{operation} returned unexpected JSON")
     return payload
+
+
+def _hostname_matches_pattern(hostname: str, pattern: str) -> bool:
+    """匹配精确主机或单 DNS 标签内的 ``*``，避免通配符跨越域名层级。"""
+    hostname_labels = hostname.split(".")
+    pattern_labels = pattern.split(".")
+    if len(hostname_labels) != len(pattern_labels):
+        return False
+    for hostname_label, pattern_label in zip(hostname_labels, pattern_labels):
+        if not _SAFE_HOST_LABEL.fullmatch(hostname_label):
+            return False
+        if "*" not in pattern_label:
+            if hostname_label != pattern_label:
+                return False
+            continue
+        label_pattern = re.escape(pattern_label).replace(r"\*", r"[a-z0-9-]+")
+        if re.fullmatch(label_pattern, hostname_label) is None:
+            return False
+    return True
 
 
 def _parse_jsonl_result(content: bytes) -> OcrDocument:

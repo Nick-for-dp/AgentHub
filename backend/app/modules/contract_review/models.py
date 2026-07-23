@@ -20,6 +20,12 @@ class ContractReviewTask(IDMixin, TimestampMixin, Base):
     __table_args__ = (
         Index("ix_contract_review_task_owner_created", "owner_org_unit_id", "created_at"),
         Index("ix_contract_review_task_created_by_created", "created_by", "created_at"),
+        Index(
+            "ix_contract_review_task_user_deleted_created",
+            "created_by",
+            "deleted_at",
+            "created_at",
+        ),
         Index("ix_contract_review_task_api_key_created", "api_key_id", "created_at"),
         Index("ix_contract_review_task_file_parse", "file_parse_task_id"),
         Index("ix_contract_review_task_status_created", "status", "created_at"),
@@ -52,3 +58,8 @@ class ContractReviewTask(IDMixin, TimestampMixin, Base):
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("user_account.id"),
+        nullable=True,
+    )

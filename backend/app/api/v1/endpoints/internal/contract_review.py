@@ -1,6 +1,9 @@
-from fastapi import APIRouter, Depends, Header
+from typing import Literal
+
+from fastapi import APIRouter, Depends, Header, Query
 from sqlalchemy.orm import Session
 
+from app.core.enums import ContractReviewTaskStatus
 from app.core.responses import APIResponse, success
 from app.db.session import get_db
 from app.modules.agent.runtime import AgentRuntimeService
@@ -10,11 +13,35 @@ from app.modules.auth.dependencies import get_current_subject
 from app.modules.auth.schemas import AuthenticatedSubject
 from app.modules.contract_review.schemas import (
     ContractReviewTaskCreate,
+    ContractReviewTaskDeleteRead,
+    ContractReviewTaskPageRead,
     ContractReviewTaskRead,
 )
 from app.modules.contract_review.service import ContractReviewService
 
 router = APIRouter()
+
+
+@router.get("/tasks", response_model=APIResponse[ContractReviewTaskPageRead])
+def list_contract_review_tasks(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    status: ContractReviewTaskStatus | None = Query(default=None),
+    contract_type: Literal["warehouse", "transport"] | None = Query(default=None),
+    keyword: str | None = Query(default=None, max_length=100),
+    subject: AuthenticatedSubject = Depends(get_current_subject),
+    db: Session = Depends(get_db),
+) -> APIResponse[ContractReviewTaskPageRead]:
+    """分页查询当前主体的合同审查最近工作记录。"""
+    result = ContractReviewService(db).list_tasks(
+        subject=subject,
+        page=page,
+        page_size=page_size,
+        status=status,
+        contract_type=contract_type,
+        keyword=keyword,
+    )
+    return success(result)
 
 
 @router.post("/tasks", response_model=APIResponse[ContractReviewTaskRead])
@@ -53,6 +80,22 @@ def cancel_contract_review_task(
     """取消 PENDING 合同审查任务（校验归属）。"""
     result = ContractReviewService(db).cancel_task(task_id=task_id, subject=subject)
     return success(ContractReviewTaskRead.model_validate(result))
+
+
+@router.delete("/tasks/{task_id}", response_model=APIResponse[ContractReviewTaskDeleteRead])
+def delete_contract_review_task(
+    task_id: str,
+    subject: AuthenticatedSubject = Depends(get_current_subject),
+    db: Session = Depends(get_db),
+) -> APIResponse[ContractReviewTaskDeleteRead]:
+    """逻辑删除已结束的合同审查工作记录。"""
+    result = ContractReviewService(db).delete_task(task_id=task_id, subject=subject)
+    return success(
+        ContractReviewTaskDeleteRead(
+            id=result.id,
+            deleted_at=result.deleted_at,
+        )
+    )
 
 
 @router.post("/tasks/{task_id}/execute", response_model=APIResponse[ContractReviewTaskRead])

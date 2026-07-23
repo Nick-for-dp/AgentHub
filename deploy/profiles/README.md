@@ -1,30 +1,26 @@
-# Single-host dual-profile 部署契约
+# 双 profile 固定目录约定
 
-本目录保存试用期“同一服务器、同一 IP、不同端口”运行 external/internal 两个完整 AgentHub 实例所需的模板。正式生产仍以 `DECISIONS.md` ADR-015 的分机和网络隔离为目标。
-
-## 固定约定
+试用服务器沿用原单实例部署思路：一份 Git checkout、两个后端进程、两个前端构建目录。
 
 | 项目 | external | internal |
 | --- | --- | --- |
-| 前端监听端口 | `8080` | `8081` |
-| backend 监听地址 | `127.0.0.1:8240` | `127.0.0.1:8241` |
-| 环境文件 | `/etc/agenthub/external.env` | `/etc/agenthub/internal.env` |
-| systemd unit | `agenthub-external.service` | `agenthub-internal.service` |
-| release 指针 | `/opt/agenthub/current-external` | `/opt/agenthub/current-internal` |
-| Python venv | `/opt/agenthub/venvs/external` | `/opt/agenthub/venvs/internal` |
-| 前端当前版本 | `/opt/agenthub/frontend-dist/external/current` | `/opt/agenthub/frontend-dist/internal/current` |
-| journald 标识 | `agenthub-external` | `agenthub-internal` |
-| Nginx access log | `/var/log/nginx/agenthub-external.access.log` | `/var/log/nginx/agenthub-internal.access.log` |
-| Nginx error log | `/var/log/nginx/agenthub-external.error.log` | `/var/log/nginx/agenthub-internal.error.log` |
+| backend | `127.0.0.1:8240` | `127.0.0.1:8241` |
+| frontend | `APP_IP:8080` | `APP_IP:8081` |
+| system user | `agenthub-external` | `agenthub-internal` |
+| env | `/etc/agenthub/external.env` | `/etc/agenthub/internal.env` |
+| venv | `/opt/agenthub/venvs/external` | `/opt/agenthub/venvs/internal` |
+| frontend root | `/opt/agenthub/repo/frontend/dist/external` | `/opt/agenthub/repo/frontend/dist/internal` |
+| systemd | `agenthub-external.service` | `agenthub-internal.service` |
 
-源码 release 使用 `/opt/agenthub/releases/<revision>/`。前端版本使用 `/opt/agenthub/frontend-dist/<profile>/releases/<revision>/`，发布脚本必须先写临时目录，再以符号链接原子切换 `current`。两个 profile 默认部署同一 revision，但 `current-external`、`current-internal` 和两个静态 `current` 必须能独立切回上一版本。
+共享源码固定为 `/opt/agenthub/repo`。不再创建版本化 release、`current-*` 软链接或独立前端发布目录。升级和回滚以同一 Git commit 为单位，两个服务仍可分别启动、停止和重启。
 
-## 不可合并的边界
+uv 管理的 Python 3.11 固定安装到 `/opt/agenthub/python`，确保两个非登录系统用户都能执行各自 venv 中的解释器。
 
-- 两个 EnvironmentFile、进程、venv、静态 root、日志标识和 Cookie 名称。
-- 两个 MySQL schema 和账号；不能仅以不同表前缀代替。
-- 两套 Auth/API Key 签名密钥、Dify App/API Key、MinIO service account。
-- `ext-*` 与 `int-*` raw/parsed bucket。
-- internal 入口 CIDR allowlist；模板在未配置 allowlist 时必须预检失败，并由 Nginx `deny all` 兜底。
+必须保持以下隔离：
 
-示例端口可以按目标服务器冲突情况整体替换，但 external/internal 之间不得相同，且环境模板、systemd、Nginx、预检和 runbook 必须同步修改。
+- 两个系统用户和两份由 systemd 读取的 `0600 root:root` 环境文件；
+- 两个 Python venv，external 不安装 PyMuPDF，internal 安装 `internal` extra；
+- 不同数据库账号/schema、Cookie、Dify Key、MinIO service account/bucket；
+- internal Nginx 入口显式 allowlist，并始终保留 `deny all`。
+
+完整操作步骤见 `deploy/single-host-dual-profile.md`。

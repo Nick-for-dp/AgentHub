@@ -22,6 +22,12 @@ class TemplateChecks(unittest.TestCase):
         cls.nginx = (ROOT / "deploy/nginx/agenthub-single-host.conf").read_text(
             encoding="utf-8"
         )
+        cls.installer = (ROOT / "deploy/scripts/install_profiles.sh").read_text(
+            encoding="utf-8"
+        )
+        cls.external_env = (ROOT / "deploy/profiles/external/.env.example").read_text(
+            encoding="utf-8"
+        )
         cls.internal_env = (ROOT / "deploy/profiles/internal/.env.example").read_text(
             encoding="utf-8"
         )
@@ -30,7 +36,8 @@ class TemplateChecks(unittest.TestCase):
     def test_external_unit_contract(self) -> None:
         for marker in (
             "EnvironmentFile=/etc/agenthub/external.env",
-            "WorkingDirectory=/opt/agenthub/current-external/backend",
+            "User=agenthub-external",
+            "WorkingDirectory=/opt/agenthub/repo/backend",
             "/opt/agenthub/venvs/external/bin/python",
             "--host 127.0.0.1 --port 8240",
             "SyslogIdentifier=agenthub-external",
@@ -41,7 +48,8 @@ class TemplateChecks(unittest.TestCase):
     def test_internal_unit_contract(self) -> None:
         for marker in (
             "EnvironmentFile=/etc/agenthub/internal.env",
-            "WorkingDirectory=/opt/agenthub/current-internal/backend",
+            "User=agenthub-internal",
+            "WorkingDirectory=/opt/agenthub/repo/backend",
             "/opt/agenthub/venvs/internal/bin/python",
             "--host 127.0.0.1 --port 8241",
             "SyslogIdentifier=agenthub-internal",
@@ -60,10 +68,10 @@ class TemplateChecks(unittest.TestCase):
         )
         for marker in (
             "listen 8080 default_server;",
-            "root /opt/agenthub/frontend-dist/external/current;",
+            "root /opt/agenthub/repo/frontend/dist/external;",
             "proxy_pass http://agenthub_external_backend;",
             "listen 8081 default_server;",
-            "root /opt/agenthub/frontend-dist/internal/current;",
+            "root /opt/agenthub/repo/frontend/dist/internal;",
             "proxy_pass http://agenthub_internal_backend;",
         ):
             self.assertIn(marker, self.nginx)
@@ -96,6 +104,21 @@ class TemplateChecks(unittest.TestCase):
         variable_name = lookup.group("name")
         self.assertRegex(self.internal_env, rf"(?m)^{re.escape(variable_name)}=")
         self.assertNotIn("SEED_CONTRACT_REVIEW_RUNTIME_APP_ID=", self.internal_env)
+
+    def test_simplified_fixed_layout_has_no_release_symlinks(self) -> None:
+        for marker in (
+            'UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-/opt/agenthub/python}"',
+            'venv_root="/opt/agenthub/venvs"',
+            '"$repo_dir/frontend/dist/external/version.json"',
+            '"$repo_dir/frontend/dist/internal/version.json"',
+        ):
+            self.assertIn(marker, self.installer)
+        for marker in ("/releases/", "current-external", "current-internal"):
+            self.assertNotIn(marker, self.installer)
+        for env_template in (self.external_env, self.internal_env):
+            self.assertNotIn("RELEASE_ROOT=", env_template)
+            self.assertNotIn("PYTHON_BIN=", env_template)
+            self.assertNotIn("FRONTEND_ROOT=", env_template)
 
 
 if __name__ == "__main__":

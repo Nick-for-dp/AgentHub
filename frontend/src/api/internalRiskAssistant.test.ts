@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { http } from './http'
 import {
+  deleteRiskTask,
   executeRiskTask,
   exportRiskWorkbook,
   listRiskTasks,
@@ -101,6 +102,17 @@ describe('internalRiskAssistant client', () => {
     expect(get).toHaveBeenCalledWith(
       '/internal/risk-assistant/tasks/risk%2F1/export',
       expect.objectContaining({ responseType: 'blob' }),
+    )
+  })
+
+  it('soft deletes a task through the stable task resource URL', async () => {
+    const remove = vi.spyOn(http, 'delete').mockResolvedValue(apiResponse(null))
+
+    await expect(deleteRiskTask('risk/1')).resolves.toBeUndefined()
+
+    expect(remove).toHaveBeenCalledWith(
+      '/internal/risk-assistant/tasks/risk%2F1',
+      expect.objectContaining({ signal: undefined }),
     )
   })
 

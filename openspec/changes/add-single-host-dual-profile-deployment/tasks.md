@@ -34,10 +34,10 @@
 ## 5. 双实例部署脚手架
 
 - [x] 5.1 新增 `deploy/profiles/external/` 与 `deploy/profiles/internal/` 环境变量模板，分别声明profile、端口、Cookie、数据库、Dify、MinIO、CORS、embed和日志配置，且不包含真实密钥。
-- [x] 5.2 新增两套systemd unit，使用独立EnvironmentFile、显式external/internal虚拟环境、不同loopback端口和日志标识，并允许单独启动、停止、重启和回滚。
+- [x] 5.2 新增两套systemd unit，使用独立系统用户、EnvironmentFile、external/internal虚拟环境、不同loopback端口和日志标识，并允许单独启动、停止和重启。
 - [x] 5.3 新增同IP双端口Nginx配置：两个独立upstream/server/static root，external与internal `/api`只代理对应backend，internal默认 `deny all` 并要求显式内网/VPN CIDR allowlist。
 - [x] 5.4 保留SSE和blocking workflow所需的代理超时/禁用缓冲设置，确保营销流式问答、合同审查长请求和风控工作台在各自入口正常工作。
-- [x] 5.5 新增双profile构建/安装脚本，创建独立venv和静态目录，external只安装基础依赖，internal安装internal extra，并以临时目录加原子切换方式发布产物。
+- [x] 5.5 新增双profile构建/安装脚本，在一份固定 Git checkout 上重建两个固定 venv 和两个前端 dist；external只安装基础依赖，internal安装internal extra，不维护版本化 release/软链接。
 - [x] 5.6 新增按profile执行Alembic migration和seed的安全命令/脚本，显式加载目标EnvironmentFile并防止同一数据库URL被用于两次部署。
 - [x] 5.7 新增无秘密双实例预检，检查profile、端口、Cookie、数据库schema/账号、签名/Auth/Dify/MinIO凭证复用、bucket命名空间、internal allowlist、embed开关、venv依赖和前端产物。
 - [x] 5.8 为预检增加脱敏配置夹具测试，覆盖合法配置、端口/Cookie/数据库/密钥/bucket冲突、缺失allowlist、external含fitz、internal缺解析依赖，并断言输出不含原始敏感值。
@@ -45,7 +45,7 @@
 
 ## 6. 部署Runbook与验收自动化
 
-- [x] 6.1 编写single-host双实例runbook，覆盖服务器目录/用户、远端MySQL双schema/账号、Dify/MinIO命名空间、IP端口、防火墙、环境文件权限、安装、migration、seed、启动和回滚顺序。
+- [x] 6.1 编写single-host双实例runbook，沿用原单实例“拉代码、配环境、构建、迁移、启动”顺序，覆盖固定目录、独立系统用户、远端MySQL双schema/账号、Dify/MinIO命名空间、防火墙和整体回滚。
 - [x] 6.2 在runbook中明确无域名HTTP仅限可信内网/VPN、Cookie Secure切换、IP SAN HTTPS方案、MinIO带端口origin CORS和真实外部用户/高敏合同前的安全门槛。
 - [x] 6.3 新增双实例smoke脚本，验证两个health、登录页品牌、external internal API为404、internal未登录API为401、Set-Cookie名称不同及静态产物版本信息。
 - [x] 6.4 为smoke脚本增加可本地运行的fixture/测试，确保失败时返回非零状态且不打印密码、Cookie值、Authorization或API Key。

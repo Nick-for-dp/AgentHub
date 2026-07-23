@@ -21,7 +21,7 @@ AgentHub 当前以 `DEPLOYMENT_PROFILE=external|internal` 区分两套交付：�
 - 在一台 Ubuntu 试用服务器上从同一代码版本稳定运行 external/internal 两个独立 AgentHub 实例。
 - 通过同一 IP 的不同前端端口提供清晰分割的营销登录入口和内部智能体登录入口。
 - 消除 Cookie、前端产物、Python 依赖、seed 数据、端口、日志和凭证的跨 profile 冲突。
-- 提供可重复执行、可预检、可分别迁移/回滚的运维脚手架。
+- 提供可重复执行、可预检、接近原单实例部署方式的运维脚手架；两个服务可分别启停，代码版本整体升级或回滚。
 - 保持 external 不注册 internal API、不打包 internal 页面、不安装 PyMuPDF 的既有边界。
 - 记录无域名 HTTP 试用的风险、内网限制和转 HTTPS/分机的退出条件。
 
@@ -43,25 +43,23 @@ Nginx 提供两个独立 origin，例如 `http://<ip>:8080` 和 `http://<ip>:808
 
 备选的同一端口路径前缀方案（如 `/marketing`、`/internal-app`）需要修改 Vite base、Vue Router history base、绝对 `/api` 路径和 Cookie path，并使后续迁移到域名更复杂，因此不采用。
 
-### 2. 共享只读源码版本，分离运行环境和前端产物
+### 2. 沿用原单实例目录，只增加两个固定运行环境
 
-部署目录使用一份 release/source tree，systemd unit 通过独立 `EnvironmentFile` 注入配置，并使用显式虚拟环境解释器：
+服务器只保留一份 `/opt/agenthub/repo` Git checkout。两套 systemd unit 共享只读源码，但使用不同系统用户、`EnvironmentFile`、Python venv 和前端构建目录：
 
 ```text
-/opt/agenthub/releases/<revision>/
+/opt/agenthub/repo/
 /opt/agenthub/venvs/external/
 /opt/agenthub/venvs/internal/
-/opt/agenthub/frontend-dist/external/
-/opt/agenthub/frontend-dist/internal/
+/opt/agenthub/repo/frontend/dist/external/
+/opt/agenthub/repo/frontend/dist/internal/
 /etc/agenthub/external.env
 /etc/agenthub/internal.env
 ```
 
-external venv 只安装基础依赖；internal venv 使用 `uv sync --extra internal` 的等价隔离安装，确保 external 运行环境不包含 `pymupdf`。systemd 不依赖仓库内共享 `.env` 或共享 `.venv`，避免 profile 之间读取错误配置。
+不再创建 `/opt/agenthub/releases/<revision>`、profile级 `current` 指针或独立 frontend release 树。external venv 只安装基础依赖；internal venv 安装 `internal` extra。两份环境文件使用 `0600 root:root`，由 systemd 读取后分别注入两个系统用户的进程，避免任一运行用户直接读取另一 profile 凭证。
 
-Vite 新增可选构建输出配置或等价脚本，使 external/internal 构建分别写入独立目录。现有 `npm run build` 的单实例开发行为保持兼容；双 profile 发布命令连续构建两次并检查 external 产物不含 internal 路由、页面 chunk 和文案。
-
-备选的两份 Git checkout 更容易理解，但升级时可能指向不同 commit，并重复占用源码/Node 安装空间；保留为手工兜底，不作为模板默认方案。
+Vite 连续构建 external/internal 到两个 `dist` 子目录并执行产物隔离检查。升级和回滚统一切换共享 checkout 的 Git commit，再重建两个固定 venv/前端；这是试用阶段为降低运维复杂度接受的短暂停机方案。
 
 ### 3. 使用 profile-aware Cookie 默认值，并由预检阻止冲突
 
@@ -109,11 +107,11 @@ IP 访问使用 host-only Cookie：`AUTH_COOKIE_DOMAIN` 和 `EMBED_COOKIE_DOMAIN
 
 预检对敏感值只做缺失、相等性和占位符检查，输出脱敏字段名与结论，不回显值。无法静态验证的数据库授权、MinIO policy 和防火墙规则进入人工验收清单。
 
-### 7. 同一 migration 链分别执行，发布和回滚按 profile 独立
+### 7. 同一 migration 链分别执行，代码版本整体发布和回滚
 
 部署顺序为：记录 ADR-015 试用例外 → 准备两个数据库/账号与外部依赖凭证 → 创建两套 venv和前端产物 → 对 external/internal 环境分别执行 `alembic upgrade head` → 分别运行 profile-aware seed → 启动两个 backend → 安装/验证 Nginx → 执行 smoke tests。
 
-发布使用版本化 release 目录和 profile 独立的静态目录/服务重启。若 internal 发布失败，可只恢复 internal 静态目录与 systemd release 指针；external 保持运行。数据库 migration 仍遵循现有向前兼容约束，本 change 本身没有 schema 变更。
+发布直接使用固定 checkout、两个固定 venv 和两个 `frontend/dist` 子目录。两个服务仍可分别启动、停止和重启，但代码升级与回滚以同一个 Git commit 为单位。数据库 migration 仍遵循现有向前兼容约束，本 change 本身没有 schema 变更。
 
 smoke tests 包括：两个 `/health` 成功、两个登录页品牌正确、external internal API 返回 404、internal internal API 未登录返回 401、两个登录响应的 `Set-Cookie` 名称不同、external 登录进入 `/chat`、internal 登录进入 internal 工作台、合同文件预签名 URL 可从 internal origin 上传。
 
@@ -127,7 +125,7 @@ smoke tests 包括：两个 `/health` 成功、两个登录页品牌正确、ext
 - [HTTP 传输暴露手机号、密码和合同正文] → 仅在可信内网/VPN使用，文档醒目标注风险；优先准备带 IP SAN 的内部 CA/自签证书，真实外部用户或真实高敏数据前必须启用 HTTPS。
 - [Cookie 仍因错误显式配置而冲突] → profile-aware 默认值、双环境预检和端到端 `Set-Cookie` smoke test 三层防护。
 - [共享主机 CPU/内存/磁盘争抢] → 两个 systemd unit 使用独立日志和可选资源限制；监控长请求、磁盘和内存，达到阈值即触发分机。
-- [共享代码升级同时影响两个服务] → 固定同一 release revision，先跑双 profile 构建/测试，按 profile 顺序重启并保留独立回滚指针。
+- [共享代码升级同时影响两个服务] → 试用阶段接受维护窗口，先停止两服务、切换已验证 Git commit、重建双 venv/前端并整体启动；需要独立发布节奏时立即拆分主机或 checkout。
 - [seed 误向错误数据库写数据] → 参数与 `DEPLOYMENT_PROFILE` 必须一致，预检数据库/schema，profile-specific 断言和测试验证不产生另一 profile 资源。
 - [Nginx allowlist 配错导致 internal 暴露] → internal 模板默认 `deny all`，没有显式 CIDR 时预检失败；通过外部网络视角执行拒绝验收。
 - [external 安装 internal AGPL 依赖] → 使用独立 venv，预检 external 环境不存在 `fitz`，保持 ADR-016 边界。
@@ -136,11 +134,11 @@ smoke tests 包括：两个 `/health` 成功、两个登录页品牌正确、ext
 
 1. 在 `DECISIONS.md` 补充 ADR-015 试用期同机例外及退出条件，并同步 `Archi.md`。
 2. 生成两套环境文件和强随机密钥，准备远端 MySQL 两个 schema/账号、独立 Dify App/API Key和 MinIO service account/bucket。
-3. 创建 external/internal 虚拟环境与双前端构建产物，执行无秘密预检。
+3. 在 `/opt/agenthub/repo` 创建两个固定虚拟环境与双前端构建产物，执行无秘密预检。
 4. 分别执行 migration 和 profile-aware seed，核对两个数据库只包含对应 profile 的初始化资源。
 5. 启动两个 systemd backend，安装双端口 Nginx，先保持 internal 端口仅对运维 IP开放。
 6. 完成 smoke、登录、营销问答、合同上传审查、风控工作台和跨入口 Cookie 隔离验收后，再扩大内网试用范围。
-7. 回滚时只停止失败 profile、恢复该 profile 上一 release/静态目录并重启；不删除另一 profile 的运行目录或数据库。
+7. 回滚时停止两个服务，将共享 checkout 切回已验证 commit，重新构建并整体启动；不自动执行 Alembic downgrade。
 
 ## Open Questions
 

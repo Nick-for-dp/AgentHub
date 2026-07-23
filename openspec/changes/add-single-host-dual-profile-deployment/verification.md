@@ -18,9 +18,9 @@
 
 ### 部署工具
 
-- preflight 回归：11 tests passed，覆盖合法配置及端口/Cookie/数据库/密钥/bucket/allowlist/依赖冲突与输出脱敏。
+- preflight 回归：12 tests passed，覆盖合法配置、external seed 密码必填及端口/Cookie/数据库/密钥/bucket/allowlist/依赖冲突与输出脱敏。
 - smoke fixture：2 tests passed，成功路径返回 0，失败路径返回非零且不输出密码、Cookie 值、Authorization 或 API Key。
-- 模板语义：5 tests passed，确认 systemd/Nginx 端口、upstream、static root、allowlist 默认拒绝、SSE/长请求参数。
+- 模板语义：7 tests passed，确认 systemd/Nginx 端口、独立系统用户、upstream、固定repo/static root、allowlist 默认拒绝、SSE/长请求参数以及不存在release/current软链接。
 - `systemd-analyze verify`：两套 unit 通过；仅出现 WSL 自带 snapd unit 的无关版本警告。
 - `nginx -t`：使用临时解压的 Ubuntu nginx-core 对配置执行真实语法检查，结果 successful。
 
