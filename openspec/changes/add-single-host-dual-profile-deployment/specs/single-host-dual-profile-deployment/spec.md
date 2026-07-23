@@ -8,7 +8,7 @@ external 实例 MUST 保持现有 profile 边界，不注册 `/api/v1/internal/*
 
 #### Scenario: 两个实例从同一版本同时启动
 
-- **WHEN** 运维使用同一 release revision和两份 profile 环境配置启动服务
+- **WHEN** 运维使用同一 Git checkout和两份 profile 环境配置启动服务
 - **THEN** external、internal backend分别在配置的不同 loopback端口健康运行，且各自报告并执行对应 deployment profile
 
 #### Scenario: external 不暴露 internal API
@@ -98,7 +98,7 @@ production seed MUST NOT在标准输出打印默认密码、原始 API Key、Dif
 
 ### Requirement: 两个实例保持依赖、数据库和外部凭证隔离
 
-同机部署 MUST使用独立 Python虚拟环境。external运行环境 MUST只安装基础依赖且不得安装或导入 `pymupdf/fitz`；internal运行环境 MUST安装 `internal` optional dependencies以支持 PDF/DOCX和内部工作台能力。
+同机部署 MUST使用不同系统用户和独立 Python虚拟环境。两份 EnvironmentFile MUST由 root 保护，运行用户不得直接读取另一 profile 的配置。external运行环境 MUST只安装基础依赖且不得安装或导入 `pymupdf/fitz`；internal运行环境 MUST安装 `internal` optional dependencies以支持 PDF/DOCX和内部工作台能力。
 
 两个实例 MUST使用不同数据库 schema和数据库账号、不同 API Key签名密钥与 Auth密钥、不同 Dify App/API Key、不同 MinIO service account及不同 raw/parsed bucket。即使 MySQL、Dify或MinIO共用物理宿主服务，上述账号和命名空间也不得复用。
 
@@ -106,6 +106,11 @@ production seed MUST NOT在标准输出打印默认密码、原始 API Key、Dif
 
 - **WHEN** 对external虚拟环境执行依赖预检和启动冒烟
 - **THEN** 基础营销服务可启动，`fitz`不可导入，external启动路径不因缺少internal依赖失败
+
+#### Scenario: external 运行身份不能读取 internal 环境文件
+
+- **WHEN** external backend以其systemd用户运行
+- **THEN** 该用户不能读取 `/etc/agenthub/internal.env`，internal用户同样不能读取external环境文件
 
 #### Scenario: internal 环境具备文档解析依赖
 
@@ -138,11 +143,11 @@ production seed MUST NOT在标准输出打印默认密码、原始 API Key、Dif
 - **WHEN** internal用户从配置的IP端口获取并使用预签名PUT URL
 - **THEN** MinIO CORS允许所需的PUT/OPTIONS与Content-Type，且浏览器不携带AgentHub Cookie或Authorization
 
-### Requirement: 双实例部署具备可重复预检、发布、验收和独立回滚能力
+### Requirement: 双实例部署具备可重复预检、简化发布、验收和整体回滚能力
 
 仓库 SHALL提供external/internal部署模板和single-host runbook，覆盖环境文件权限、虚拟环境、双前端构建、两次migration、两次profile seed、systemd、Nginx、日志、备份、健康检查、smoke test及拆分迁移步骤。预检 MUST对敏感配置执行缺失、占位符和跨profile相等性检查，但不得输出原始值。
 
-发布和回滚 MUST可按profile独立执行。验收 MUST验证两个健康检查、登录页品牌、路由边界、Cookie隔离、登录后跳转、营销问答、合同上传审查和风控工作台；internal失败不得要求回滚external静态产物或服务。
+两个服务 MUST可分别启动、停止和重启。试用阶段代码发布和回滚 SHALL使用同一 Git checkout整体执行，不要求维护profile独立release或软链接。验收 MUST验证两个健康检查、登录页品牌、路由边界、Cookie隔离、登录后跳转、营销问答、合同上传审查和风控工作台。
 
 #### Scenario: 预检通过后才允许启动双实例
 
@@ -154,10 +159,10 @@ production seed MUST NOT在标准输出打印默认密码、原始 API Key、Dif
 - **WHEN** 发布流程执行Alembic migration
 - **THEN** 同一migration链分别使用external和internal环境连接两个数据库完成升级，不把一个数据库URL复用于两次操作
 
-#### Scenario: 仅回滚失败profile
+#### Scenario: 使用已验证commit整体回滚
 
-- **WHEN** internal新版本启动或smoke失败而external验收正常
-- **THEN** 运维恢复internal上一版本静态目录/服务指针并重启internal，external继续运行且不回滚
+- **WHEN** 新版本构建、启动或smoke失败
+- **THEN** 运维停止两个服务，将共享checkout切回已验证commit，重建两个venv和前端产物后整体启动，且不自动执行Alembic downgrade
 
 #### Scenario: 达到退出条件后可迁移internal到独立主机
 

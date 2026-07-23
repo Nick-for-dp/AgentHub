@@ -10,6 +10,126 @@
       </a-button>
     </section>
 
+    <a-card class="history-card" :bordered="false">
+      <template #title>
+        <div class="history-title">
+          <strong>最近工作记录</strong>
+          <span>共 {{ taskList.total }} 条</span>
+        </div>
+      </template>
+      <template #extra>
+        <a-button
+          type="text"
+          size="small"
+          :loading="taskList.loading"
+          aria-label="刷新最近工作记录"
+          @click="loadTaskList()"
+        >
+          <ReloadOutlined />
+          刷新
+        </a-button>
+      </template>
+
+      <div class="history-filters">
+        <a-input-search
+          v-model:value="historyKeywordDraft"
+          allow-clear
+          placeholder="按合同文件名筛选"
+          @search="searchHistory"
+        />
+        <a-select
+          :value="taskList.status"
+          allow-clear
+          placeholder="全部状态"
+          :options="historyStatusOptions"
+          @change="changeHistoryStatus"
+        />
+        <a-select
+          :value="taskList.contractType"
+          allow-clear
+          placeholder="全部合同类型"
+          :options="contractTypeOptions"
+          @change="changeHistoryContractType"
+        />
+        <a-button v-if="hasHistoryFilters" @click="resetHistoryFilters">清空筛选</a-button>
+      </div>
+
+      <a-alert
+        v-if="taskList.errorMessage"
+        class="history-error"
+        type="error"
+        show-icon
+        :message="taskList.errorMessage"
+      />
+      <a-table
+        class="history-table"
+        row-key="id"
+        size="small"
+        :columns="historyColumns"
+        :data-source="taskList.items"
+        :loading="taskList.loading"
+        :pagination="false"
+        :scroll="{ x: 940 }"
+        :locale="{ emptyText: '暂无符合条件的工作记录' }"
+      >
+        <template #bodyCell="{ column, record }">
+          <template v-if="column.key === 'filename'">
+            <a-button
+              type="link"
+              class="history-open-button"
+              :loading="loadingTaskId === record.id"
+              :disabled="isBusy && loadingTaskId !== record.id"
+              @click="handleOpenHistory(record.id)"
+            >
+              {{ record.original_filename || '未命名合同' }}
+            </a-button>
+          </template>
+          <template v-else-if="column.key === 'status'">
+            <a-tag :color="taskStatusColor(record.status)">{{ taskStatusLabel(record.status) }}</a-tag>
+          </template>
+          <template v-else-if="column.key === 'contractType'">
+            {{ contractTypeLabel(record.contract_type) }}
+          </template>
+          <template v-else-if="column.key === 'clauses'">
+            {{ record.sensitive_clause_count }} / {{ record.total_clause_count }}
+          </template>
+          <template v-else-if="column.key === 'updatedAt'">
+            {{ formatHistoryTime(record.updated_at) }}
+          </template>
+          <template v-else-if="column.key === 'actions'">
+            <a-popconfirm
+              :disabled="!isHistoryDeletable(record.status)"
+              title="仅从最近记录中隐藏，合同文件和审计数据仍会保留。确定删除？"
+              ok-text="逻辑删除"
+              cancel-text="取消"
+              @confirm="handleDeleteHistory(record.id)"
+            >
+              <a-button
+                type="text"
+                danger
+                size="small"
+                :title="isHistoryDeletable(record.status) ? '删除工作记录' : '任务结束后才可删除'"
+                :disabled="!isHistoryDeletable(record.status)"
+                :loading="deletingTaskId === record.id"
+              >
+                <DeleteOutlined />
+              </a-button>
+            </a-popconfirm>
+          </template>
+        </template>
+      </a-table>
+      <a-pagination
+        v-if="taskList.total > taskList.pageSize"
+        class="history-pagination"
+        size="small"
+        :current="taskList.page"
+        :page-size="taskList.pageSize"
+        :total="taskList.total"
+        :show-size-changer="false"
+        @change="changeHistoryPage"
+      />
+    </a-card>
+
     <a-card class="submission-card" :bordered="false">
       <a-form layout="vertical">
         <div class="submission-grid">
@@ -258,12 +378,14 @@
 </template>
 
 <script setup lang="ts">
-import { InboxOutlined } from '@ant-design/icons-vue'
+import { DeleteOutlined, InboxOutlined, ReloadOutlined } from '@ant-design/icons-vue'
+import { message } from 'ant-design-vue'
 import type { FileType, UploadFile } from 'ant-design-vue/es/upload/interface'
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import type {
   ContractClauseReviewResult,
+  ContractReviewTaskStatus,
   ContractType,
   CounterpartyLevel,
   ParsedDocumentBlock,
@@ -289,6 +411,7 @@ const fileList = ref<UploadFile[]>([])
 const fieldErrors = ref<SubmissionValidation>({})
 const clauseFilter = ref<ClauseFilter>('sensitive')
 const documentPane = ref<DocumentPaneInstance | null>(null)
+const historyKeywordDraft = ref('')
 
 const {
   phase,
@@ -298,10 +421,16 @@ const {
   elapsedSeconds,
   fileParseTask,
   reviewTask,
+  taskList,
+  loadingTaskId,
+  deletingTaskId,
   isBusy,
   canRetryExecute,
   startReview,
   retryExecute,
+  loadTaskList,
+  loadTask,
+  deleteTask,
   cancelWaiting,
   reset,
 } = useContractReviewWorkbench()
@@ -313,6 +442,24 @@ const contractTypeOptions = [
 
 const counterpartyLevelOptions = (['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7'] as CounterpartyLevel[])
   .map((value) => ({ value, label: value }))
+
+const historyStatusOptions = [
+  { value: 'PENDING', label: '待执行' },
+  { value: 'RUNNING', label: '处理中' },
+  { value: 'SUCCEEDED', label: '已完成' },
+  { value: 'FAILED', label: '执行失败' },
+  { value: 'CANCELLED', label: '已取消' },
+]
+
+const historyColumns = [
+  { title: '合同文件', key: 'filename', width: 260 },
+  { title: '状态', key: 'status', width: 100 },
+  { title: '合同类型', key: 'contractType', width: 110 },
+  { title: '资信等级', dataIndex: 'counterparty_level', key: 'counterpartyLevel', width: 90 },
+  { title: '敏感/全部条款', key: 'clauses', width: 120 },
+  { title: '最近更新', key: 'updatedAt', width: 180 },
+  { title: '操作', key: 'actions', width: 70, fixed: 'right' },
+]
 
 const reviewResult = computed(() => reviewTask.value?.result ?? null)
 const reviewSummary = computed(() => reviewResult.value?.summary ?? {
@@ -343,6 +490,9 @@ const totalWarningCount = computed(() => (
 ))
 const hasResult = computed(() => reviewTask.value?.status === 'SUCCEEDED' && reviewResult.value !== null)
 const canStart = computed(() => Object.keys(validateContractReviewSubmission(currentSubmission())).length === 0)
+const hasHistoryFilters = computed(() => (
+  Boolean(taskList.value.status || taskList.value.contractType || taskList.value.keyword)
+))
 const currentStep = computed(() => {
   if (phase.value === 'preparing_upload' || phase.value === 'uploading') return 0
   if (phase.value === 'parsing') return 1
@@ -354,6 +504,10 @@ const failureDescription = computed(() => (
     ? '已先查询任务状态，确认它仍可执行；可点击“安全重试审查”。'
     : '请检查当前阶段提示；重新选择文件后可以发起新的审查。'
 ))
+
+onMounted(() => {
+  void loadTaskList()
+})
 
 function beforeUpload(file: FileType): boolean {
   const nextErrors = validateContractReviewSubmission({
@@ -396,10 +550,57 @@ async function handleStart(): Promise<void> {
   fieldErrors.value = validateContractReviewSubmission(submission)
   if (Object.keys(fieldErrors.value).length > 0) return
   await startReview(submission)
+  await loadTaskList({ page: 1 })
 }
 
 async function handleRetryExecute(): Promise<void> {
   await retryExecute()
+  await loadTaskList()
+}
+
+async function handleOpenHistory(taskId: string): Promise<void> {
+  selectedFile.value = null
+  fileList.value = []
+  fieldErrors.value = {}
+  clauseFilter.value = 'sensitive'
+  const loaded = await loadTask(taskId)
+  if (loaded && reviewTask.value) {
+    contractType.value = reviewTask.value.contract_type
+    counterpartyLevel.value = reviewTask.value.counterparty_level
+  }
+  await loadTaskList()
+}
+
+async function handleDeleteHistory(taskId: string): Promise<void> {
+  const deleted = await deleteTask(taskId)
+  if (deleted) message.success('工作记录已移除，合同文件和审计数据仍保留。')
+}
+
+function searchHistory(value: string): void {
+  historyKeywordDraft.value = value.trim()
+  void loadTaskList({ page: 1, keyword: historyKeywordDraft.value })
+}
+
+function changeHistoryStatus(value: ContractReviewTaskStatus | undefined): void {
+  void loadTaskList({ page: 1, status: value ?? null })
+}
+
+function changeHistoryContractType(value: ContractType | undefined): void {
+  void loadTaskList({ page: 1, contractType: value ?? null })
+}
+
+function changeHistoryPage(page: number): void {
+  void loadTaskList({ page })
+}
+
+function resetHistoryFilters(): void {
+  historyKeywordDraft.value = ''
+  void loadTaskList({
+    page: 1,
+    status: null,
+    contractType: null,
+    keyword: '',
+  })
 }
 
 function handleStopWaiting(): void {
@@ -465,6 +666,39 @@ function warningText(warning: ReviewWarning): string {
   if (typeof warning.code === 'string' && warning.code.trim()) return warning.code
   return '审查结果包含未分类提示。'
 }
+
+function isHistoryDeletable(status: ContractReviewTaskStatus): boolean {
+  return ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(status)
+}
+
+function taskStatusLabel(status: ContractReviewTaskStatus): string {
+  return {
+    PENDING: '待执行',
+    RUNNING: '处理中',
+    SUCCEEDED: '已完成',
+    FAILED: '失败',
+    CANCELLED: '已取消',
+  }[status]
+}
+
+function taskStatusColor(status: ContractReviewTaskStatus): string {
+  return {
+    PENDING: 'default',
+    RUNNING: 'processing',
+    SUCCEEDED: 'success',
+    FAILED: 'error',
+    CANCELLED: 'default',
+  }[status]
+}
+
+function contractTypeLabel(value: ContractType): string {
+  return value === 'transport' ? '运输合同' : '仓储合同'
+}
+
+function formatHistoryTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
 </script>
 
 <style scoped>
@@ -493,12 +727,66 @@ function warningText(warning: ReviewWarning): string {
 }
 
 .submission-card,
+.history-card,
 .progress-card,
 .summary-card,
 .clause-pane {
   border: 1px solid rgba(187, 223, 255, 0.75);
   border-radius: var(--radius-lg);
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+}
+
+.history-card {
+  margin-bottom: 16px;
+}
+
+.history-card :deep(.ant-card-head) {
+  min-height: 52px;
+}
+
+.history-card :deep(.ant-card-body) {
+  padding: 16px 20px 18px;
+}
+
+.history-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.history-title span {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.history-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.5fr) minmax(150px, 0.75fr) minmax(160px, 0.8fr) auto;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.history-error {
+  margin-bottom: 12px;
+}
+
+.history-table :deep(.ant-table-cell) {
+  vertical-align: middle;
+}
+
+.history-open-button {
+  max-width: 240px;
+  height: auto;
+  padding: 0;
+  white-space: normal;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.history-pagination {
+  margin-top: 14px;
+  text-align: right;
 }
 
 .submission-card :deep(.ant-card-body) {
@@ -815,6 +1103,10 @@ function warningText(warning: ReviewWarning): string {
   .page-intro > .ant-btn {
     align-self: flex-start;
   }
+
+  .history-filters {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 @media (max-width: 480px) {
@@ -835,6 +1127,14 @@ function warningText(warning: ReviewWarning): string {
 
   .tag-row {
     justify-content: flex-start;
+  }
+
+  .history-card :deep(.ant-card-body) {
+    padding: 14px;
+  }
+
+  .history-filters {
+    grid-template-columns: 1fr;
   }
 }
 </style>

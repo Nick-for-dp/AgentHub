@@ -110,6 +110,7 @@ function createClient(overrides: Partial<RiskAssistantClient> = {}): RiskAssista
     listRiskTasks: async () => ({ items: [], total: 0, page: 1, page_size: 20 }),
     createRiskTask: async () => riskTask('PENDING'),
     getRiskTask: async () => riskTask('SUCCEEDED'),
+    deleteRiskTask: async () => undefined,
     executeRiskTask: async () => riskTask('SUCCEEDED'),
     submitRiskReview: async () => riskTask('SUCCEEDED'),
     cancelRiskTask: async () => riskTask('CANCELLED'),
@@ -356,5 +357,38 @@ describe('useRiskAssistantWorkbench recovery', () => {
 
     expect(getRiskTask).toHaveBeenCalledTimes(1)
     expect(workbench.selectedTask.value?.status).toBe('SUCCEEDED')
+  })
+
+  it('soft deletes a recent task and clears its selected detail', async () => {
+    const deleteRiskTask = vi.fn(async () => undefined)
+    const workbench = useRiskAssistantWorkbench({
+      client: createClient({ deleteRiskTask }),
+      pollInitialIntervalMs: 0,
+    })
+    workbench.selectedTask.value = riskTask('FAILED')
+    workbench.taskList.value = {
+      items: [{
+        id: 'risk-1',
+        business_code: 'BIZ-001',
+        status: 'FAILED',
+        document_count: 4,
+        created_at: '2026-07-20T10:00:00+08:00',
+        updated_at: '2026-07-20T10:01:00+08:00',
+      }],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+      status: null,
+      loading: false,
+      errorMessage: null,
+    }
+
+    await expect(workbench.deleteTask('risk-1')).resolves.toBe(true)
+
+    expect(deleteRiskTask).toHaveBeenCalledWith('risk-1')
+    expect(workbench.taskList.value.items).toEqual([])
+    expect(workbench.taskList.value.total).toBe(0)
+    expect(workbench.selectedTask.value).toBeNull()
+    expect(workbench.deletingTaskId.value).toBeNull()
   })
 })

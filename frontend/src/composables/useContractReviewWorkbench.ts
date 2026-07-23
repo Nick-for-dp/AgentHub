@@ -3,6 +3,8 @@ import { computed, getCurrentInstance, onBeforeUnmount, ref } from 'vue'
 import {
   type ContractReviewClient,
   type ContractReviewTask,
+  type ContractReviewTaskStatus,
+  type ContractReviewTaskSummary,
   type ContractType,
   type CounterpartyLevel,
   type FileParseTask,
@@ -59,6 +61,18 @@ export interface WorkbenchState {
   canRetryExecute: boolean
 }
 
+export interface ContractReviewTaskListState {
+  items: ContractReviewTaskSummary[]
+  total: number
+  page: number
+  pageSize: number
+  status: ContractReviewTaskStatus | null
+  contractType: ContractType | null
+  keyword: string
+  loading: boolean
+  errorMessage: string | null
+}
+
 const SUPPORTED_FILE_PATTERN = /\.(pdf|docx)$/i
 
 const PHASE_LABELS: Record<ContractReviewPhase, string> = {
@@ -104,13 +118,31 @@ export function useContractReviewWorkbench(options: WorkbenchOptions = {}) {
   const elapsedNow = ref(now())
   const fileParseTask = ref<FileParseTask | null>(null)
   const reviewTask = ref<ContractReviewTask | null>(null)
+  const taskList = ref<ContractReviewTaskListState>({
+    items: [],
+    total: 0,
+    page: 1,
+    pageSize: 10,
+    status: null,
+    contractType: null,
+    keyword: '',
+    loading: false,
+    errorMessage: null,
+  })
+  const loadingTaskId = ref<string | null>(null)
+  const deletingTaskId = ref<string | null>(null)
   const runId = ref(0)
 
   let requestController: AbortController | null = null
+  let listController: AbortController | null = null
+  let deleteController: AbortController | null = null
+  let listRunId = 0
   let uploadOperation: UploadOperation | null = null
   let elapsedTimer: ReturnType<typeof setInterval> | null = null
 
-  const isBusy = computed(() => !['idle', 'succeeded', 'failed'].includes(phase.value))
+  const isBusy = computed(() => (
+    loadingTaskId.value !== null || !['idle', 'succeeded', 'failed'].includes(phase.value)
+  ))
   const elapsedSeconds = computed(() => {
     if (!startedAt.value) return 0
     return Math.max(0, Math.floor((elapsedNow.value - startedAt.value) / 1000))
@@ -224,6 +256,130 @@ export function useContractReviewWorkbench(options: WorkbenchOptions = {}) {
     }
   }
 
+  async function loadTaskList(params: {
+    page?: number
+    pageSize?: number
+    status?: ContractReviewTaskStatus | null
+    contractType?: ContractType | null
+    keyword?: string | null
+  } = {}): Promise<boolean> {
+    listRunId += 1
+    const currentListRunId = listRunId
+    listController?.abort()
+    listController = new AbortController()
+    const page = params.page ?? taskList.value.page
+    const pageSize = params.pageSize ?? taskList.value.pageSize
+    const status = params.status === undefined ? taskList.value.status : params.status
+    const contractType = params.contractType === undefined
+      ? taskList.value.contractType
+      : params.contractType
+    const keyword = params.keyword === undefined
+      ? taskList.value.keyword
+      : params.keyword?.trim() ?? ''
+    taskList.value.loading = true
+    taskList.value.errorMessage = null
+    try {
+      const result = await client.listContractReviewTasks({
+        page,
+        pageSize,
+        status,
+        contractType,
+        keyword,
+        signal: listController.signal,
+      })
+      if (currentListRunId !== listRunId) return false
+      taskList.value = {
+        items: result.items,
+        total: result.total,
+        page: result.page,
+        pageSize: result.page_size,
+        status,
+        contractType,
+        keyword,
+        loading: false,
+        errorMessage: null,
+      }
+      return true
+    } catch (error) {
+      if (currentListRunId !== listRunId) return false
+      taskList.value.loading = false
+      taskList.value.errorMessage = toSafeContractReviewErrorMessage(error)
+      return false
+    } finally {
+      if (currentListRunId === listRunId) listController = null
+    }
+  }
+
+  async function loadTask(taskId: string): Promise<boolean> {
+    if (isBusy.value) return false
+    const currentRunId = beginTaskLoad(taskId)
+    try {
+      const task = await client.getContractReviewTask(taskId, { signal: currentSignal() })
+      ensureActive(currentRunId)
+      const parseTask = await client.getFileParseTask(
+        task.file_parse_task_id,
+        { signal: currentSignal() },
+      )
+      ensureActive(currentRunId)
+      reviewTask.value = task
+      fileParseTask.value = parseTask
+      loadingTaskId.value = null
+      startedAt.value = null
+      elapsedNow.value = now()
+
+      if (task.status === 'SUCCEEDED') {
+        finishRun('succeeded', currentRunId)
+        return true
+      }
+      if (task.status === 'PENDING') {
+        errorMessage.value = '该任务尚未执行，可点击“安全重试审查”。'
+        finishRun('failed', currentRunId)
+        return true
+      }
+      if (task.status === 'RUNNING') {
+        startedAt.value = parseTaskTimestamp(task.created_at) ?? now()
+        phase.value = 'reviewing'
+        startElapsedTimer(currentRunId)
+        reviewTask.value = await waitForReviewTerminal(task, currentRunId)
+        assertSucceeded(reviewTask.value.status, reviewTask.value.error_message, '合同审查')
+        finishRun('succeeded', currentRunId)
+        return true
+      }
+
+      errorMessage.value = task.error_message?.trim()
+        || (task.status === 'CANCELLED' ? '合同审查任务已取消。' : '合同审查未能成功完成。')
+      finishRun('failed', currentRunId)
+      return true
+    } catch (error) {
+      handleRunError(error, currentRunId)
+      return false
+    } finally {
+      if (isCurrent(currentRunId)) loadingTaskId.value = null
+    }
+  }
+
+  async function deleteTask(taskId: string): Promise<boolean> {
+    if (deletingTaskId.value) return false
+    deleteController = new AbortController()
+    deletingTaskId.value = taskId
+    taskList.value.errorMessage = null
+    try {
+      await client.deleteContractReviewTask(taskId, { signal: deleteController.signal })
+      if (reviewTask.value?.id === taskId) reset()
+      const nextPage = taskList.value.items.length === 1 && taskList.value.page > 1
+        ? taskList.value.page - 1
+        : taskList.value.page
+      await loadTaskList({ page: nextPage })
+      return true
+    } catch (error) {
+      taskList.value.errorMessage = toSafeContractReviewErrorMessage(error)
+      return false
+    } finally {
+      deleteController = null
+      deletingTaskId.value = null
+    }
+  }
+
   async function executeAndResolve(
     task: ContractReviewTask,
     currentRunId: number,
@@ -310,6 +466,21 @@ export function useContractReviewWorkbench(options: WorkbenchOptions = {}) {
     startedAt.value = null
   }
 
+  function beginTaskLoad(taskId: string): number {
+    stopActiveRun()
+    runId.value += 1
+    const currentRunId = runId.value
+    requestController = new AbortController()
+    phase.value = 'idle'
+    errorMessage.value = null
+    uploadProgress.value = 0
+    fileParseTask.value = null
+    reviewTask.value = null
+    startedAt.value = null
+    loadingTaskId.value = taskId
+    return currentRunId
+  }
+
   function handleRunError(error: unknown, currentRunId: number): void {
     if (!isCurrent(currentRunId)) return
     if (isAbortError(error)) {
@@ -336,6 +507,7 @@ export function useContractReviewWorkbench(options: WorkbenchOptions = {}) {
     uploadOperation = null
     requestController?.abort()
     requestController = null
+    loadingTaskId.value = null
     stopElapsedTimer()
   }
 
@@ -357,7 +529,16 @@ export function useContractReviewWorkbench(options: WorkbenchOptions = {}) {
     }
   }
 
-  if (getCurrentInstance()) onBeforeUnmount(stopActiveRun)
+  function dispose(): void {
+    stopActiveRun()
+    listRunId += 1
+    listController?.abort()
+    listController = null
+    deleteController?.abort()
+    deleteController = null
+  }
+
+  if (getCurrentInstance()) onBeforeUnmount(dispose)
 
   return {
     phase,
@@ -367,12 +548,18 @@ export function useContractReviewWorkbench(options: WorkbenchOptions = {}) {
     elapsedSeconds,
     fileParseTask,
     reviewTask,
+    taskList,
+    loadingTaskId,
+    deletingTaskId,
     runId,
     isBusy,
     canRetryExecute,
     state,
     startReview,
     retryExecute,
+    loadTaskList,
+    loadTask,
+    deleteTask,
     cancelWaiting,
     reset,
   }
@@ -382,6 +569,11 @@ function assertSucceeded(status: InternalTaskStatus, detail: string | null | und
   if (status === 'SUCCEEDED') return
   if (status === 'CANCELLED') throw new WorkbenchError(`${label}任务已取消。`)
   throw new WorkbenchError(detail?.trim() || `${label}未能成功完成。`)
+}
+
+function parseTaskTimestamp(value: string): number | null {
+  const timestamp = Date.parse(value)
+  return Number.isNaN(timestamp) ? null : timestamp
 }
 
 function abortableDelay(delayMs: number, signal: AbortSignal | undefined): Promise<void> {

@@ -34,21 +34,43 @@
         <a-spin :spinning="taskList.loading">
           <a-empty v-if="!taskList.loading && taskList.items.length === 0" description="暂无风控任务" />
           <div v-else class="task-list">
-            <button
+            <div
               v-for="task in taskList.items"
               :key="task.id"
-              type="button"
               class="task-list-item"
               :class="{ active: selectedTask?.id === task.id }"
-              @click="openTask(task.id)"
             >
-              <span class="task-list-topline">
-                <strong>{{ task.business_code }}</strong>
-                <a-tag :color="taskStatusColor(task.status)">{{ taskStatusLabel(task.status) }}</a-tag>
-              </span>
-              <span>{{ task.document_count }} 份文件 · {{ formatTime(task.updated_at) }}</span>
-              <small v-if="task.error_message">{{ task.error_message }}</small>
-            </button>
+              <button type="button" class="task-list-open" @click="openTask(task.id)">
+                <span class="task-list-topline">
+                  <strong>{{ task.business_code }}</strong>
+                  <a-tag :color="taskStatusColor(task.status)">{{ taskStatusLabel(task.status) }}</a-tag>
+                </span>
+                <span>{{ task.document_count }} 份文件 · {{ formatTime(task.updated_at) }}</span>
+                <small v-if="task.error_message">{{ task.error_message }}</small>
+              </button>
+              <a-popconfirm
+                :disabled="!isTaskDeletable(task.status)"
+                title="确认删除该风控任务？"
+                description="删除后将不再显示，但审计数据仍会保留。"
+                ok-text="删除"
+                cancel-text="取消"
+                @confirm="handleDeleteTask(task.id)"
+              >
+                <a-button
+                  class="task-delete"
+                  type="text"
+                  danger
+                  size="small"
+                  :aria-label="`删除任务 ${task.business_code}`"
+                  :loading="deletingTaskId === task.id"
+                  :title="isTaskDeletable(task.status) ? '删除任务' : '任务结束后才可删除'"
+                  :disabled="!isTaskDeletable(task.status)
+                    || (deletingTaskId !== null && deletingTaskId !== task.id)"
+                >
+                  <DeleteOutlined />
+                </a-button>
+              </a-popconfirm>
+            </div>
           </div>
         </a-spin>
         <a-pagination
@@ -185,7 +207,7 @@
 </template>
 
 <script setup lang="ts">
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons-vue'
+import { DeleteOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -217,6 +239,7 @@ const {
   selectedTask,
   detailErrorMessage,
   checkpointConflictMessage,
+  deletingTaskId,
   operation,
   taskList,
   isTaskBusy,
@@ -234,6 +257,7 @@ const {
   retryExecute,
   loadTaskList,
   loadTask,
+  deleteTask,
   refreshSelectedTask,
   submitReview,
   cancelSelectedTask,
@@ -282,6 +306,16 @@ async function handleCreateTask(): Promise<void> {
 async function handleCancel(): Promise<void> {
   await cancelSelectedTask()
   await loadTaskList()
+}
+
+async function handleDeleteTask(taskId: string): Promise<void> {
+  const rawRouteTaskId = route.params.taskId
+  const routeTaskId = Array.isArray(rawRouteTaskId) ? rawRouteTaskId[0] : rawRouteTaskId
+  const wasSelected = selectedTask.value?.id === taskId || routeTaskId === taskId
+  if (!await deleteTask(taskId)) return
+  if (wasSelected) await router.push('/internal/risk-assistant')
+  const lastPage = Math.max(1, Math.ceil(taskList.value.total / taskList.value.pageSize))
+  await loadTaskList({ page: Math.min(taskList.value.page, lastPage) })
 }
 
 function startNewTask(): void {
@@ -352,6 +386,10 @@ function taskStatusColor(status: InternalTaskStatus): string {
     FAILED: 'error',
     CANCELLED: 'default',
   }[status]
+}
+
+function isTaskDeletable(status: InternalTaskStatus): boolean {
+  return ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(status)
 }
 
 function auditStatusColor(status: string): string {
@@ -451,14 +489,15 @@ function displayValue(value: unknown): string {
 }
 
 .task-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
   width: 100%;
   padding: 11px;
   border: 1px solid var(--color-border);
   border-radius: 9px;
   background: #ffffff;
   color: inherit;
-  text-align: left;
-  cursor: pointer;
 }
 
 .task-list-item:hover,
@@ -469,6 +508,22 @@ function displayValue(value: unknown): string {
 
 .task-list-item.active {
   box-shadow: inset 3px 0 0 var(--color-primary);
+}
+
+.task-list-open {
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-delete {
+  flex: none;
+  margin: -5px -6px 0 0;
 }
 
 .task-list-topline {
@@ -484,15 +539,15 @@ function displayValue(value: unknown): string {
   overflow-wrap: anywhere;
 }
 
-.task-list-item > span:not(.task-list-topline),
-.task-list-item small {
+.task-list-open > span:not(.task-list-topline),
+.task-list-open small {
   display: block;
   margin-top: 6px;
   color: var(--color-text-secondary);
   font-size: 11px;
 }
 
-.task-list-item small {
+.task-list-open small {
   color: #cf1322;
 }
 

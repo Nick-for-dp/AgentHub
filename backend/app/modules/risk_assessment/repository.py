@@ -16,8 +16,16 @@ class RiskAssessmentRepository:
     def add_task(self, task: RiskAssessmentTask) -> None:
         self.db.add(task)
 
-    def get_task(self, task_id: str, *, for_update: bool = False) -> RiskAssessmentTask | None:
+    def get_task(
+        self,
+        task_id: str,
+        *,
+        for_update: bool = False,
+        include_deleted: bool = False,
+    ) -> RiskAssessmentTask | None:
         statement = select(RiskAssessmentTask).where(RiskAssessmentTask.id == task_id)
+        if not include_deleted:
+            statement = statement.where(RiskAssessmentTask.deleted_at.is_(None))
         if for_update:
             statement = statement.with_for_update()
         return self.db.scalar(statement)
@@ -30,7 +38,10 @@ class RiskAssessmentRepository:
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[tuple[RiskAssessmentTask, int]], int]:
-        filters = [RiskAssessmentTask.created_by == created_by]
+        filters = [
+            RiskAssessmentTask.created_by == created_by,
+            RiskAssessmentTask.deleted_at.is_(None),
+        ]
         if status is not None:
             filters.append(RiskAssessmentTask.status == status)
         total = int(

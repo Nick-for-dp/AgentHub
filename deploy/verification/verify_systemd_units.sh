@@ -1,29 +1,39 @@
 #!/usr/bin/env bash
-# Verify unit syntax without requiring an installed AgentHub runtime.
+# Verify unit syntax entirely inside a temporary directory.
 
 set -euo pipefail
 
 repo_root="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
-[[ "$(id -u)" -eq 0 ]] || { echo "verification requires root" >&2; exit 77; }
-[[ ! -e /opt/agenthub ]] || {
-    echo "/opt/agenthub already exists; run systemd-analyze verify on the installed target instead" >&2
-    exit 78
+work_dir="$(mktemp -d)"
+trap 'rm -rf -- "$work_dir"' EXIT
+
+install -d "$work_dir/repo/backend" "$work_dir/repo/deploy"
+install -d "$work_dir/venvs/external/bin" "$work_dir/venvs/internal/bin"
+install -d "$work_dir/etc/agenthub" "$work_dir/units"
+install -m 0755 /bin/true "$work_dir/venvs/external/bin/python"
+install -m 0755 /bin/true "$work_dir/venvs/internal/bin/python"
+install -m 0644 "$repo_root/deploy/single-host-dual-profile.md" \
+    "$work_dir/repo/deploy/single-host-dual-profile.md"
+printf 'DEPLOYMENT_PROFILE=external\n' >"$work_dir/etc/agenthub/external.env"
+printf 'DEPLOYMENT_PROFILE=internal\n' >"$work_dir/etc/agenthub/internal.env"
+
+render_unit() {
+    local source="$1"
+    local target="$2"
+    sed \
+        -e "s#/opt/agenthub/repo#$work_dir/repo#g" \
+        -e "s#/opt/agenthub/venvs#$work_dir/venvs#g" \
+        -e "s#/etc/agenthub#$work_dir/etc/agenthub#g" \
+        -e 's/^User=.*/User=root/' \
+        -e 's/^Group=.*/Group=root/' \
+        "$source" >"$target"
 }
 
-unit_dir="$(mktemp -d)"
-cleanup() {
-    rm -rf "$unit_dir" /opt/agenthub
-}
-trap cleanup EXIT
-
-install -d /opt/agenthub/venvs/external/bin /opt/agenthub/venvs/internal/bin
-install -d /opt/agenthub/current-external/backend /opt/agenthub/current-internal/backend
-install -m 0755 /bin/true /opt/agenthub/venvs/external/bin/python
-install -m 0755 /bin/true /opt/agenthub/venvs/internal/bin/python
-install -m 0644 "$repo_root/deploy/systemd/agenthub-external.service" \
-    "$unit_dir/agenthub-external.service"
-install -m 0644 "$repo_root/deploy/systemd/agenthub-internal.service" \
-    "$unit_dir/agenthub-internal.service"
+render_unit "$repo_root/deploy/systemd/agenthub-external.service" \
+    "$work_dir/units/agenthub-external.service"
+render_unit "$repo_root/deploy/systemd/agenthub-internal.service" \
+    "$work_dir/units/agenthub-internal.service"
 
 systemd-analyze verify \
-    "$unit_dir/agenthub-external.service" "$unit_dir/agenthub-internal.service"
+    "$work_dir/units/agenthub-external.service" \
+    "$work_dir/units/agenthub-internal.service"

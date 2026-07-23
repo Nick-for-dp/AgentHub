@@ -11,6 +11,7 @@ from pathlib import Path
 
 from profile_config import (
     EnvFileError,
+    RUNTIME_PATHS,
     load_profile_pair,
     render_report,
     validate_database_targets,
@@ -33,8 +34,8 @@ def parse_args() -> argparse.Namespace:
 def _target_commands(
     profile: str, env: dict[str, str], action: str
 ) -> list[tuple[str, list[str], Path]]:
-    release_root = Path(env.get("RELEASE_ROOT", ""))
-    python_bin = Path(env.get("PYTHON_BIN", ""))
+    release_root = Path(RUNTIME_PATHS[profile]["RELEASE_ROOT"])
+    python_bin = Path(RUNTIME_PATHS[profile]["PYTHON_BIN"])
     backend_root = release_root / "backend"
     if not python_bin.is_file() or not (backend_root / "alembic.ini").is_file():
         raise RuntimeError(f"{profile} runtime paths are not installed")

@@ -19,6 +19,12 @@ class RiskAssessmentTask(IDMixin, TimestampMixin, Base):
         Index("ix_risk_task_created_by_created", "created_by", "created_at"),
         Index("ix_risk_task_status_created", "status", "created_at"),
         Index("ix_risk_task_graph_thread", "graph_thread_id"),
+        Index(
+            "ix_risk_task_created_by_deleted_created",
+            "created_by",
+            "deleted_at",
+            "created_at",
+        ),
     )
 
     owner_org_unit_id: Mapped[str | None] = mapped_column(
@@ -44,6 +50,10 @@ class RiskAssessmentTask(IDMixin, TimestampMixin, Base):
     result_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("user_account.id"), nullable=True
+    )
 
 
 class RiskAssessmentDocument(IDMixin, TimestampMixin, Base):

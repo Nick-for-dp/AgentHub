@@ -120,3 +120,35 @@ class ContractReviewTaskRead(BaseModel):
     created_at: BeijingDateTime
     updated_at: BeijingDateTime
     finished_at: BeijingDateTime | None = None
+
+
+class ContractReviewTaskSummaryRead(BaseModel):
+    """最近工作记录列表中的合同审查摘要。"""
+
+    id: str
+    original_filename: str | None = None
+    status: ContractReviewTaskStatus
+    contract_type: str
+    counterparty_level: CounterpartyLevel
+    total_clause_count: int = 0
+    sensitive_clause_count: int = 0
+    error_message: str | None = None
+    created_at: BeijingDateTime
+    updated_at: BeijingDateTime
+    finished_at: BeijingDateTime | None = None
+
+
+class ContractReviewTaskPageRead(BaseModel):
+    """合同审查最近工作记录分页响应。"""
+
+    items: list[ContractReviewTaskSummaryRead]
+    total: int
+    page: int
+    page_size: int
+
+
+class ContractReviewTaskDeleteRead(BaseModel):
+    """合同审查任务逻辑删除结果。"""
+
+    id: str
+    deleted_at: BeijingDateTime

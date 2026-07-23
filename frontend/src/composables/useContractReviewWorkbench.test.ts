@@ -72,9 +72,19 @@ function createClient(overrides: Partial<ContractReviewClient> = {}): ContractRe
     uploadToPresignedUrl: () => ({ promise: Promise.resolve(), cancel: vi.fn() }),
     createFileParseTask: async () => createParseTask(),
     getFileParseTask: async () => createParseTask(),
+    listContractReviewTasks: async () => ({
+      items: [],
+      total: 0,
+      page: 1,
+      page_size: 10,
+    }),
     createContractReviewTask: async () => createReviewTask('PENDING'),
     getContractReviewTask: async () => createReviewTask('SUCCEEDED'),
     executeContractReviewTask: async () => createReviewTask('SUCCEEDED'),
+    deleteContractReviewTask: async (taskId) => ({
+      id: taskId,
+      deleted_at: '2026-07-23T10:00:00+08:00',
+    }),
     ...overrides,
   }
 }
@@ -233,5 +243,94 @@ describe('useContractReviewWorkbench', () => {
 
     expect(workbench.phase.value).toBe('idle')
     expect(workbench.reviewTask.value).toBeNull()
+  })
+
+  it('loads recent work records with stable filters', async () => {
+    const listContractReviewTasks = vi.fn(async () => ({
+      items: [{
+        id: 'review-1',
+        original_filename: '仓储合同.docx',
+        status: 'SUCCEEDED' as const,
+        contract_type: 'warehouse' as const,
+        counterparty_level: 'A3' as const,
+        total_clause_count: 6,
+        sensitive_clause_count: 2,
+        created_at: '2026-07-23T09:00:00+08:00',
+        updated_at: '2026-07-23T09:05:00+08:00',
+      }],
+      total: 1,
+      page: 2,
+      page_size: 5,
+    }))
+    const workbench = useContractReviewWorkbench({
+      client: createClient({ listContractReviewTasks }),
+    })
+
+    await expect(workbench.loadTaskList({
+      page: 2,
+      pageSize: 5,
+      status: 'SUCCEEDED',
+      contractType: 'warehouse',
+      keyword: ' 仓储 ',
+    })).resolves.toBe(true)
+
+    expect(listContractReviewTasks).toHaveBeenCalledWith(expect.objectContaining({
+      page: 2,
+      pageSize: 5,
+      status: 'SUCCEEDED',
+      contractType: 'warehouse',
+      keyword: '仓储',
+    }))
+    expect(workbench.taskList.value.items[0]?.original_filename).toBe('仓储合同.docx')
+    expect(workbench.taskList.value.total).toBe(1)
+  })
+
+  it('restores a completed work record and its parsed document', async () => {
+    const getContractReviewTask = vi.fn(async () => createReviewTask('SUCCEEDED'))
+    const getFileParseTask = vi.fn(async () => createParseTask('SUCCEEDED'))
+    const workbench = useContractReviewWorkbench({
+      client: createClient({ getContractReviewTask, getFileParseTask }),
+    })
+
+    await expect(workbench.loadTask('review-1')).resolves.toBe(true)
+
+    expect(getContractReviewTask).toHaveBeenCalledWith('review-1', expect.any(Object))
+    expect(getFileParseTask).toHaveBeenCalledWith('parse-1', expect.any(Object))
+    expect(workbench.phase.value).toBe('succeeded')
+    expect(workbench.reviewTask.value?.id).toBe('review-1')
+    expect(workbench.fileParseTask.value?.id).toBe('parse-1')
+  })
+
+  it('logically deletes a terminal record and refreshes the current page', async () => {
+    const deleteContractReviewTask = vi.fn(async (taskId: string) => ({
+      id: taskId,
+      deleted_at: '2026-07-23T10:00:00+08:00',
+    }))
+    const listContractReviewTasks = vi.fn(async () => ({
+      items: [],
+      total: 0,
+      page: 1,
+      page_size: 10,
+    }))
+    const workbench = useContractReviewWorkbench({
+      client: createClient({ deleteContractReviewTask, listContractReviewTasks }),
+    })
+    workbench.taskList.value.items = [{
+      id: 'review-1',
+      original_filename: '运输合同.pdf',
+      status: 'SUCCEEDED',
+      contract_type: 'transport',
+      counterparty_level: 'A2',
+      total_clause_count: 5,
+      sensitive_clause_count: 1,
+      created_at: '2026-07-23T09:00:00+08:00',
+      updated_at: '2026-07-23T09:05:00+08:00',
+    }]
+
+    await expect(workbench.deleteTask('review-1')).resolves.toBe(true)
+
+    expect(deleteContractReviewTask).toHaveBeenCalledWith('review-1', expect.any(Object))
+    expect(listContractReviewTasks).toHaveBeenCalled()
+    expect(workbench.taskList.value.items).toEqual([])
   })
 })

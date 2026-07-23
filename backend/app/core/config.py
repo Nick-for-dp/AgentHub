@@ -1,5 +1,6 @@
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,6 +26,8 @@ EXTERNAL_AUTH_COOKIE_NAME = "agenthub_session"
 INTERNAL_AUTH_COOKIE_NAME = "agenthub_internal_session"
 EXTERNAL_EMBED_COOKIE_NAME = "agenthub_embed_session"
 INTERNAL_EMBED_COOKIE_NAME = "agenthub_internal_embed_session"
+OFFICIAL_PADDLEOCR_JOB_HOST = "paddleocr.aistudio-app.com"
+OFFICIAL_PADDLEOCR_RESULT_HOST_PATTERN = "paddleocr-store-*.bj.bcebos.com"
 
 
 class Settings(BaseSettings):
@@ -86,7 +89,7 @@ class Settings(BaseSettings):
     risk_document_paddleocr_job_url: str = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
     risk_document_paddleocr_api_token: SecretStr | None = None
     risk_document_paddleocr_model: str = "PaddleOCR-VL-1.6"
-    risk_document_paddleocr_result_hosts: str = "paddleocr-store-8.bj.bcebos.com"
+    risk_document_paddleocr_result_hosts: str = OFFICIAL_PADDLEOCR_RESULT_HOST_PATTERN
     risk_document_qwen_base_url: str | None = None
     risk_document_qwen_api_key: SecretStr | None = None
     risk_document_qwen_model: str = "qwen3.7-plus"
@@ -143,11 +146,19 @@ class Settings(BaseSettings):
 
     @property
     def risk_document_paddleocr_result_host_list(self) -> list[str]:
-        return [
+        hosts = [
             host.strip().lower()
             for host in self.risk_document_paddleocr_result_hosts.split(",")
             if host.strip()
         ]
+        job_host = (urlparse(self.risk_document_paddleocr_job_url).hostname or "").lower()
+        if (
+            job_host == OFFICIAL_PADDLEOCR_JOB_HOST
+            and OFFICIAL_PADDLEOCR_RESULT_HOST_PATTERN not in hosts
+        ):
+            # 官方服务会动态切换带编号的结果 bucket；保留旧精确白名单时也要兼容新编号。
+            hosts.append(OFFICIAL_PADDLEOCR_RESULT_HOST_PATTERN)
+        return hosts
 
     @model_validator(mode="after")
     def resolve_profile_defaults_and_validate(self) -> "Settings":

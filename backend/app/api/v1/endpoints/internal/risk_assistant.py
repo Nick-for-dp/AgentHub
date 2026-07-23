@@ -69,6 +69,16 @@ def get_risk_assessment_task(
     return success(service.to_read(task))
 
 
+@router.delete("/tasks/{task_id}", response_model=APIResponse[None])
+def delete_risk_assessment_task(
+    task_id: str,
+    subject: AuthenticatedSubject = Depends(get_current_subject),
+    service: RiskAssessmentService = Depends(get_risk_assessment_service),
+) -> APIResponse[None]:
+    service.soft_delete_task(task_id=task_id, subject=subject)
+    return success(None)
+
+
 @router.post("/tasks/{task_id}/execute", response_model=APIResponse[RiskAssessmentTaskRead])
 async def execute_risk_assessment_task(
     task_id: str,

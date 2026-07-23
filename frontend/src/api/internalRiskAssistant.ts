@@ -255,6 +255,16 @@ export async function getRiskTask(
   return data.data
 }
 
+export async function deleteRiskTask(
+  taskId: string,
+  options: RequestOptions = {},
+): Promise<void> {
+  await http.delete<APIResponse<null>>(
+    `/internal/risk-assistant/tasks/${encodeURIComponent(taskId)}`,
+    { signal: options.signal },
+  )
+}
+
 export async function executeRiskTask(
   taskId: string,
   options: RiskExecuteOptions = {},
@@ -332,6 +342,7 @@ export interface RiskAssistantClient {
   listRiskTasks: typeof listRiskTasks
   createRiskTask: typeof createRiskTask
   getRiskTask: typeof getRiskTask
+  deleteRiskTask: typeof deleteRiskTask
   executeRiskTask: typeof executeRiskTask
   submitRiskReview: typeof submitRiskReview
   cancelRiskTask: typeof cancelRiskTask
@@ -347,6 +358,7 @@ export const riskAssistantClient: RiskAssistantClient = {
   listRiskTasks,
   createRiskTask,
   getRiskTask,
+  deleteRiskTask,
   executeRiskTask,
   submitRiskReview,
   cancelRiskTask,

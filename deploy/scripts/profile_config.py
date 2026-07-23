@@ -29,18 +29,23 @@ EXPECTED = {
     "external": {
         "SERVER_PORT": "8240",
         "FRONTEND_PORT": "8080",
-        "RELEASE_ROOT": "/opt/agenthub/current-external",
-        "PYTHON_BIN": "/opt/agenthub/venvs/external/bin/python",
-        "FRONTEND_ROOT": "/opt/agenthub/frontend-dist/external/current",
-        "JOURNAL_IDENTIFIER": "agenthub-external",
     },
     "internal": {
         "SERVER_PORT": "8241",
         "FRONTEND_PORT": "8081",
-        "RELEASE_ROOT": "/opt/agenthub/current-internal",
+    },
+}
+
+RUNTIME_PATHS = {
+    "external": {
+        "RELEASE_ROOT": "/opt/agenthub/repo",
+        "PYTHON_BIN": "/opt/agenthub/venvs/external/bin/python",
+        "FRONTEND_ROOT": "/opt/agenthub/repo/frontend/dist/external",
+    },
+    "internal": {
+        "RELEASE_ROOT": "/opt/agenthub/repo",
         "PYTHON_BIN": "/opt/agenthub/venvs/internal/bin/python",
-        "FRONTEND_ROOT": "/opt/agenthub/frontend-dist/internal/current",
-        "JOURNAL_IDENTIFIER": "agenthub-internal",
+        "FRONTEND_ROOT": "/opt/agenthub/repo/frontend/dist/internal",
     },
 }
 
@@ -62,12 +67,6 @@ REQUIRED_COMMON = (
     "OBJECT_STORAGE_BUCKET_RAW",
     "OBJECT_STORAGE_BUCKET_PARSED",
     "MINIO_CORS_ALLOWED_ORIGINS",
-    "RELEASE_ROOT",
-    "PYTHON_BIN",
-    "FRONTEND_ROOT",
-    "JOURNAL_IDENTIFIER",
-    "NGINX_ACCESS_LOG",
-    "NGINX_ERROR_LOG",
 )
 
 SENSITIVE_FIELDS = (
@@ -532,6 +531,8 @@ def _validate_secrets(
             "OBJECT_STORAGE_ACCESS_KEY",
             "OBJECT_STORAGE_SECRET_KEY",
             "SEED_ADMIN_PASSWORD",
+            "SEED_EXT_PASSWORD",
+            "SEED_EXT2_PASSWORD",
         ),
         "internal": (
             "API_KEY_SIGNING_SECRET",
@@ -648,22 +649,6 @@ def validate_profile_pair(
             Issue("PORT_CONFLICT", "FRONTEND_PORT", "frontend ports must differ")
         )
 
-    for field in ("RELEASE_ROOT", "PYTHON_BIN", "FRONTEND_ROOT", "JOURNAL_IDENTIFIER"):
-        if external.get(field, "").strip() == internal.get(field, "").strip():
-            issues.append(
-                Issue(
-                    "RUNTIME_PATH_CONFLICT",
-                    field,
-                    "profiles must use different runtime targets",
-                )
-            )
-    for field in ("NGINX_ACCESS_LOG", "NGINX_ERROR_LOG"):
-        if external.get(field, "").strip() == internal.get(field, "").strip():
-            issues.append(
-                Issue(
-                    "LOG_PATH_CONFLICT", field, "profiles must use different log files"
-                )
-            )
     if (
         external.get("REDIS_URL", "").strip()
         and external.get("REDIS_URL", "").strip()
@@ -837,10 +822,10 @@ def validate_runtime_artifacts(
 ) -> list[Issue]:
     issues: list[Issue] = []
     external_modules, external_probe_issue = probe_python_modules(
-        external.get("PYTHON_BIN", "")
+        RUNTIME_PATHS["external"]["PYTHON_BIN"]
     )
     internal_modules, internal_probe_issue = probe_python_modules(
-        internal.get("PYTHON_BIN", "")
+        RUNTIME_PATHS["internal"]["PYTHON_BIN"]
     )
     if external_probe_issue:
         issues.append(external_probe_issue)
@@ -850,10 +835,10 @@ def validate_runtime_artifacts(
         issues.extend(validate_module_inventory(external_modules, internal_modules))
 
     external_names, external_text, external_frontend_issues = _frontend_payload(
-        external.get("FRONTEND_ROOT", "")
+        RUNTIME_PATHS["external"]["FRONTEND_ROOT"]
     )
     internal_names, internal_text, internal_frontend_issues = _frontend_payload(
-        internal.get("FRONTEND_ROOT", "")
+        RUNTIME_PATHS["internal"]["FRONTEND_ROOT"]
     )
     issues.extend(external_frontend_issues)
     issues.extend(internal_frontend_issues)

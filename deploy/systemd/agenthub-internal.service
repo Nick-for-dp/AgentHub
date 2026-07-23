@@ -1,6 +1,6 @@
 [Unit]
 Description=AgentHub Internal Backend
-Documentation=file:/opt/agenthub/current-internal/deploy/single-host-dual-profile.md
+Documentation=file:/opt/agenthub/repo/deploy/single-host-dual-profile.md
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=30
@@ -8,9 +8,9 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-User=agenthub
-Group=agenthub
-WorkingDirectory=/opt/agenthub/current-internal/backend
+User=agenthub-internal
+Group=agenthub-internal
+WorkingDirectory=/opt/agenthub/repo/backend
 EnvironmentFile=/etc/agenthub/internal.env
 ExecStartPre=/usr/bin/test "${DEPLOYMENT_PROFILE}" = internal
 ExecStartPre=/usr/bin/test -x /opt/agenthub/venvs/internal/bin/python

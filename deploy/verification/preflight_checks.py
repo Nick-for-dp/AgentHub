@@ -54,13 +54,9 @@ def valid_profiles() -> tuple[dict[str, str], dict[str, str]]:
         "OBJECT_STORAGE_BUCKET_RAW": "ext-agenthub-raw",
         "OBJECT_STORAGE_BUCKET_PARSED": "ext-agenthub-parsed",
         "MINIO_CORS_ALLOWED_ORIGINS": "http://10.20.30.40:8080",
-        "SEED_ADMIN_PASSWORD": "ExtAdminPassword-0000000000000001",
-        "RELEASE_ROOT": "/opt/agenthub/current-external",
-        "PYTHON_BIN": "/opt/agenthub/venvs/external/bin/python",
-        "FRONTEND_ROOT": "/opt/agenthub/frontend-dist/external/current",
-        "JOURNAL_IDENTIFIER": "agenthub-external",
-        "NGINX_ACCESS_LOG": "/var/log/nginx/agenthub-external.access.log",
-        "NGINX_ERROR_LOG": "/var/log/nginx/agenthub-external.error.log",
+        "SEED_ADMIN_PASSWORD": "ExAdm8SafeX",
+        "SEED_EXT_PASSWORD": "ExDemo8SafeX",
+        "SEED_EXT2_PASSWORD": "ExDemo9SafeY",
     }
     internal = {
         **common,
@@ -84,13 +80,7 @@ def valid_profiles() -> tuple[dict[str, str], dict[str, str]]:
         "OBJECT_STORAGE_BUCKET_RAW": "int-agenthub-raw",
         "OBJECT_STORAGE_BUCKET_PARSED": "int-agenthub-parsed",
         "MINIO_CORS_ALLOWED_ORIGINS": "http://10.20.30.40:8081",
-        "SEED_ADMIN_PASSWORD": "IntAdminPassword-0000000000000001",
-        "RELEASE_ROOT": "/opt/agenthub/current-internal",
-        "PYTHON_BIN": "/opt/agenthub/venvs/internal/bin/python",
-        "FRONTEND_ROOT": "/opt/agenthub/frontend-dist/internal/current",
-        "JOURNAL_IDENTIFIER": "agenthub-internal",
-        "NGINX_ACCESS_LOG": "/var/log/nginx/agenthub-internal.access.log",
-        "NGINX_ERROR_LOG": "/var/log/nginx/agenthub-internal.error.log",
+        "SEED_ADMIN_PASSWORD": "InAdm8SafeX",
     }
     return external, internal
 
@@ -140,6 +130,16 @@ class PreflightChecks(unittest.TestCase):
         internal["INTERNAL_ALLOWED_CIDRS"] = ""
         self.assert_has_code(
             validate_profile_pair(external, internal), "MISSING_ALLOWLIST"
+        )
+
+    def test_missing_external_seed_passwords(self) -> None:
+        external, internal = valid_profiles()
+        external.pop("SEED_EXT_PASSWORD")
+        external.pop("SEED_EXT2_PASSWORD")
+        issues = validate_profile_pair(external, internal)
+        self.assertEqual(
+            {issue.field for issue in issues if issue.code == "PLACEHOLDER_VALUE"},
+            {"external.SEED_EXT_PASSWORD", "external.SEED_EXT2_PASSWORD"},
         )
 
     def test_external_must_not_contain_fitz(self) -> None:

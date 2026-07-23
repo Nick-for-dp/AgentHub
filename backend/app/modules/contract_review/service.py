@@ -18,7 +18,11 @@ from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
 from app.modules.auth.schemas import AuthenticatedSubject
 from app.modules.contract_review.models import ContractReviewTask
 from app.modules.contract_review.repository import ContractReviewTaskRepository
-from app.modules.contract_review.schemas import ContractReviewTaskCreate
+from app.modules.contract_review.schemas import (
+    ContractReviewTaskCreate,
+    ContractReviewTaskPageRead,
+    ContractReviewTaskSummaryRead,
+)
 from app.modules.file_parse.models import FileParseTask
 
 CONTRACT_REVIEW_INVOKE_SCOPE = "agent:contract_review:invoke"
@@ -74,6 +78,33 @@ class ContractReviewService:
         """查询合同审查任务并校验归属。"""
         return self._get_owned_task(task_id, subject)
 
+    def list_tasks(
+        self,
+        *,
+        subject: AuthenticatedSubject,
+        page: int = 1,
+        page_size: int = 20,
+        status: ContractReviewTaskStatus | None = None,
+        contract_type: str | None = None,
+        keyword: str | None = None,
+    ) -> ContractReviewTaskPageRead:
+        """按当前主体分页查询未删除的合同审查工作记录。"""
+        owner = self._subject_owner_filter(subject)
+        rows, total = self.repository.list_tasks(
+            **owner,
+            status=status.value if status is not None else None,
+            contract_type=contract_type,
+            keyword=keyword.strip() if keyword and keyword.strip() else None,
+            page=page,
+            page_size=page_size,
+        )
+        return ContractReviewTaskPageRead(
+            items=[self._to_task_summary(task, filename) for task, filename in rows],
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
+
     def cancel_task(
         self,
         *,
@@ -86,6 +117,29 @@ class ContractReviewService:
             raise ConflictError("only pending contract review task can be cancelled")
         task.status = ContractReviewTaskStatus.CANCELLED
         task.finished_at = datetime.now(timezone.utc)
+        self.db.add(task)
+        self.db.commit()
+        self.db.refresh(task)
+        return task
+
+    def delete_task(
+        self,
+        *,
+        task_id: str,
+        subject: AuthenticatedSubject,
+    ) -> ContractReviewTask:
+        """逻辑删除已结束的合同审查工作记录，保留文件与调用审计数据。"""
+        if subject.api_key_id or subject.caller_type.upper() != "USER" or not subject.user_id:
+            raise ForbiddenError("contract review work record deletion requires internal user")
+        task = self._get_owned_task(task_id, subject, for_update=True)
+        if task.status not in {
+            ContractReviewTaskStatus.SUCCEEDED,
+            ContractReviewTaskStatus.FAILED,
+            ContractReviewTaskStatus.CANCELLED,
+        }:
+            raise ConflictError("only terminal contract review task can be deleted")
+        task.deleted_at = datetime.now(timezone.utc)
+        task.deleted_by_user_id = subject.user_id
         self.db.add(task)
         self.db.commit()
         self.db.refresh(task)
@@ -131,13 +185,51 @@ class ContractReviewService:
             raise ConflictError("file parse task must be succeeded before contract review")
         return task
 
-    def _get_owned_task(self, task_id: str, subject: AuthenticatedSubject) -> ContractReviewTask:
-        task = self.repository.get_task(task_id)
+    def _get_owned_task(
+        self,
+        task_id: str,
+        subject: AuthenticatedSubject,
+        *,
+        for_update: bool = False,
+    ) -> ContractReviewTask:
+        task = self.repository.get_task(task_id, for_update=for_update)
         if task is None:
             raise NotFoundError("contract review task not found")
         if not self._is_subject_owner(task, subject):
             raise ForbiddenError("permission denied")
         return task
+
+    @staticmethod
+    def _subject_owner_filter(subject: AuthenticatedSubject) -> dict[str, str | None]:
+        """按与单任务归属校验相同的优先级生成列表查询条件。"""
+        if subject.api_key_id:
+            return {"api_key_id": subject.api_key_id}
+        if subject.user_id:
+            return {"created_by": subject.user_id}
+        if subject.org_unit_id:
+            return {"owner_org_unit_id": subject.org_unit_id}
+        return {}
+
+    @staticmethod
+    def _to_task_summary(
+        task: ContractReviewTask,
+        original_filename: str | None,
+    ) -> ContractReviewTaskSummaryRead:
+        result = task.result if isinstance(task.result, dict) else {}
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        return ContractReviewTaskSummaryRead(
+            id=task.id,
+            original_filename=original_filename,
+            status=task.status,
+            contract_type=task.contract_type,
+            counterparty_level=task.counterparty_level,
+            total_clause_count=_safe_count(summary.get("total_clause_count")),
+            sensitive_clause_count=_safe_count(summary.get("sensitive_clause_count")),
+            error_message=task.error_message,
+            created_at=task.created_at,
+            updated_at=task.updated_at,
+            finished_at=task.finished_at,
+        )
 
     @staticmethod
     def _is_subject_owner(task, subject: AuthenticatedSubject) -> bool:
@@ -162,3 +254,13 @@ def is_subject_owner(task, subject: AuthenticatedSubject) -> bool:
 
 # 兼容旧名称，避免测试与脚本瞬间全红
 ContractReviewHandler = ContractReviewService
+
+
+def _safe_count(value: object) -> int:
+    """将历史结果中的计数字段安全收敛为非负整数。"""
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(0, int(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0

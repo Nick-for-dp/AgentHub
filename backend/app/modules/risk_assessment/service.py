@@ -382,6 +382,25 @@ class RiskAssessmentService:
         self.db.refresh(task)
         return task
 
+    def soft_delete_task(
+        self,
+        *,
+        task_id: str,
+        subject: AuthenticatedSubject,
+    ) -> None:
+        """隐藏用户任务，同时保留任务、文档、复核和调用记录用于审计。"""
+        task = self.get_task(task_id=task_id, subject=subject, for_update=True)
+        if task.status not in {
+            RiskAssessmentTaskStatus.SUCCEEDED,
+            RiskAssessmentTaskStatus.FAILED,
+            RiskAssessmentTaskStatus.CANCELLED,
+        }:
+            raise ConflictError("only terminal risk assessment task can be deleted")
+        task.deleted_at = datetime.now(timezone.utc)
+        task.deleted_by_user_id = subject.user_id
+        self.db.add(task)
+        self.db.commit()
+
     @staticmethod
     def _review_source(
         result: dict[str, Any], review_item: dict[str, Any]

@@ -106,6 +106,7 @@ export function useRiskAssistantWorkbench(options: RiskWorkbenchOptions = {}) {
   const operation = ref<RiskWorkbenchOperation>('IDLE')
   const canRetryExecuteAfterUncertain = ref(false)
   const checkpointConflictMessage = ref<string | null>(null)
+  const deletingTaskId = ref<string | null>(null)
   const taskList = ref<RiskTaskListState>({
     items: [],
     total: 0,
@@ -399,6 +400,24 @@ export function useRiskAssistantWorkbench(options: RiskWorkbenchOptions = {}) {
     }
   }
 
+  async function deleteTask(taskId: string): Promise<boolean> {
+    if (deletingTaskId.value) return false
+    deletingTaskId.value = taskId
+    taskList.value.errorMessage = null
+    try {
+      await client.deleteRiskTask(taskId)
+      taskList.value.items = taskList.value.items.filter((item) => item.id !== taskId)
+      taskList.value.total = Math.max(0, taskList.value.total - 1)
+      if (selectedTask.value?.id === taskId) clearSelectedTask()
+      return true
+    } catch (error) {
+      taskList.value.errorMessage = toSafeRiskAssistantError(error)
+      return false
+    } finally {
+      deletingTaskId.value = null
+    }
+  }
+
   async function refreshSelectedTask(): Promise<boolean> {
     return selectedTask.value ? loadTask(selectedTask.value.id) : false
   }
@@ -661,6 +680,7 @@ export function useRiskAssistantWorkbench(options: RiskWorkbenchOptions = {}) {
     selectedTask,
     detailErrorMessage,
     checkpointConflictMessage,
+    deletingTaskId,
     operation,
     taskList,
     isTaskBusy,
@@ -679,6 +699,7 @@ export function useRiskAssistantWorkbench(options: RiskWorkbenchOptions = {}) {
     retryExecute,
     loadTaskList,
     loadTask,
+    deleteTask,
     refreshSelectedTask,
     submitReview,
     cancelSelectedTask,

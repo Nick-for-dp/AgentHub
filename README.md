@@ -16,6 +16,7 @@ AgentHub 是一个 RAG 驱动的智能体应用平台。当前阶段聚焦智能
 | `docs/testing.md` | 测试策略与验收清单。 |
 | `docs/deployment.md` | 本地和部署说明。 |
 | `deploy/single-host-dual-profile.md` | 同一服务器双 profile 试用部署 Runbook。 |
+| `deploy/internal-contract-review-209.md` | 209 单独部署 internal 合同审查服务的快速 Runbook。 |
 | `docs/frontend-design.md` | 前端设计规范。 |
 | `docs/ui-review-checklist.md` | UI 验收清单。 |
 
@@ -137,7 +138,7 @@ npm run check:profile-builds
 | Python 依赖 | 基础依赖，不含 PyMuPDF | `internal` extra，含 DOCX/PDF 解析 |
 | 数据/凭证 | 独立 MySQL schema/账号、Dify App/Key、MinIO account 与 `ext-*` bucket | 独立 MySQL schema/账号、Dify App/Key、MinIO account 与 `int-*` bucket |
 
-部署模板位于 `deploy/profiles/`、`deploy/systemd/`、`deploy/nginx/agenthub-single-host.conf`；完整步骤、预检、migration/seed、smoke、备份和独立回滚见 `deploy/single-host-dual-profile.md`。
+部署模板位于 `deploy/profiles/`、`deploy/systemd/`、`deploy/nginx/agenthub-single-host.conf`；完整步骤、预检、migration/seed、smoke、备份和整体回滚见 `deploy/single-host-dual-profile.md`。
 
 无域名 HTTP 只允许可信公司内网/VPN，internal 端口必须使用 CIDR allowlist + `deny all`，8240/8241 不得对其它机器开放。真实外部用户或未经脱敏的高敏合同/单据使用前必须启用 HTTPS（可使用内部 CA 的 IP SAN 证书）或迁移到正式分机拓扑。
 

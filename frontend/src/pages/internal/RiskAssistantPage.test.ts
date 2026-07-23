@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { computed, defineComponent, nextTick, ref } from 'vue'
-import { shallowMount } from '@vue/test-utils'
+import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -42,6 +42,11 @@ const PaginationStub = defineComponent({
   emits: ['change'],
   template: '<div />',
 })
+const PopconfirmStub = defineComponent({
+  name: 'PopconfirmStub',
+  emits: ['confirm'],
+  template: '<div><slot /></div>',
+})
 const baseStubs = {
   'a-typography-title': PassThrough,
   'a-button': PassThrough,
@@ -51,10 +56,12 @@ const baseStubs = {
   'a-empty': EmptyStub,
   'a-tag': PassThrough,
   'a-pagination': PaginationStub,
+  'a-popconfirm': PopconfirmStub,
   'a-tabs': PassThrough,
   'a-tab-pane': PassThrough,
   PlusOutlined: PassThrough,
   ReloadOutlined: PassThrough,
+  DeleteOutlined: PassThrough,
 }
 
 function task(status: RiskAssessmentTask['status'] = 'WAITING_REVIEW'): RiskAssessmentTask {
@@ -103,6 +110,7 @@ function workbenchState() {
     selectedTask,
     detailErrorMessage: ref(null),
     checkpointConflictMessage: ref(null),
+    deletingTaskId: ref<string | null>(null),
     operation: ref('IDLE'),
     taskList,
     isTaskBusy: computed(() => false),
@@ -120,6 +128,7 @@ function workbenchState() {
     retryExecute: vi.fn(),
     loadTaskList: vi.fn(async () => true),
     loadTask: vi.fn(async () => true),
+    deleteTask: vi.fn(async () => true),
     refreshSelectedTask: vi.fn(),
     submitReview: vi.fn(),
     cancelSelectedTask: vi.fn(),
@@ -193,5 +202,29 @@ describe('RiskAssistantPage', () => {
     await nextTick()
     expect(wrapper.findComponent(EmptyStub).exists()).toBe(true)
     expect(wrapper.findComponent({ name: 'RiskFilePackagePanel' }).exists()).toBe(true)
+  })
+
+  it('confirms deletion, returns from a deleted detail route, and reloads the list', async () => {
+    const state = workbenchState()
+    mocks.useWorkbench.mockReturnValue(state)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/internal/risk-assistant', component: PassThrough },
+        { path: '/internal/risk-assistant/tasks/:taskId', component: PassThrough },
+      ],
+    })
+    await router.push('/internal/risk-assistant/tasks/risk-1')
+    await router.isReady()
+    const wrapper = shallowMount(RiskAssistantPage, {
+      global: { plugins: [router], stubs: baseStubs },
+    })
+
+    wrapper.findComponent(PopconfirmStub).vm.$emit('confirm')
+    await flushPromises()
+
+    expect(state.deleteTask).toHaveBeenCalledWith('risk-1')
+    expect(router.currentRoute.value.path).toBe('/internal/risk-assistant')
+    expect(state.loadTaskList).toHaveBeenCalledWith({ page: 1 })
   })
 })
