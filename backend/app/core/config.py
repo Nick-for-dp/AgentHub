@@ -1,11 +1,7 @@
 from functools import lru_cache
-from typing import Literal
-from urllib.parse import urlparse
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-from app.core.enums import DeploymentProfile
 
 
 DEV_EMBED_EXTERNAL_TOKEN_SECRET = "dev-industrial-embed-token-secret-change-me"
@@ -22,12 +18,8 @@ INSECURE_EMBED_SECRET_VALUES = frozenset(
     }
 )
 INSECURE_EMBED_SECRET_MARKERS = ("change-me", "changeme", "dev-", "dev_", "example", "placeholder")
-EXTERNAL_AUTH_COOKIE_NAME = "agenthub_session"
-INTERNAL_AUTH_COOKIE_NAME = "agenthub_internal_session"
-EXTERNAL_EMBED_COOKIE_NAME = "agenthub_embed_session"
-INTERNAL_EMBED_COOKIE_NAME = "agenthub_internal_embed_session"
-OFFICIAL_PADDLEOCR_JOB_HOST = "paddleocr.aistudio-app.com"
-OFFICIAL_PADDLEOCR_RESULT_HOST_PATTERN = "paddleocr-store-*.bj.bcebos.com"
+DEFAULT_AUTH_COOKIE_NAME = "agenthub_session"
+DEFAULT_EMBED_SESSION_COOKIE_NAME = "agenthub_embed_session"
 
 
 class Settings(BaseSettings):
@@ -35,7 +27,6 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     environment: str = "local"
     debug: bool = False
-    deployment_profile: DeploymentProfile = DeploymentProfile.EXTERNAL
     api_v1_prefix: str = "/api/v1"
     server_host: str = "0.0.0.0"
     server_port: int = 8240
@@ -43,12 +34,11 @@ class Settings(BaseSettings):
     # 单元测试使用的独立数据库；必须与开发/生产库分开，测试会反复建表删表。
     # 必须在 .env 显式配置 TEST_DATABASE_URL；未配置时运行测试会直接报错，避免误连业务库。
     test_database_url: str | None = None
-    redis_url: str = "redis://localhost:6379/0"
     api_key_signing_secret: str = Field(default="dev-only-change-me-please", min_length=16)
     # 登录态配置
     auth_token_secret: str = Field(default="dev-auth-secret-change-me-please", min_length=32)
     auth_token_issuer: str = "agenthub"
-    auth_cookie_name: str = EXTERNAL_AUTH_COOKIE_NAME
+    auth_cookie_name: str = DEFAULT_AUTH_COOKIE_NAME
     auth_cookie_secure: bool = False
     auth_cookie_samesite: str = "lax"
     auth_cookie_domain: str | None = None
@@ -65,7 +55,7 @@ class Settings(BaseSettings):
     embed_external_token_issuer: str = "industrial-internet-mock"
     embed_external_token_audience: str = "agenthub"
     embed_session_expire_minutes: int = 10
-    embed_session_cookie_name: str = EXTERNAL_EMBED_COOKIE_NAME
+    embed_session_cookie_name: str = DEFAULT_EMBED_SESSION_COOKIE_NAME
     embed_cookie_secure: bool = False
     embed_cookie_samesite: str = "lax"
     embed_cookie_domain: str | None = None
@@ -75,33 +65,6 @@ class Settings(BaseSettings):
     # Dify 集成配置
     dify_base_url: str | None = None
     dify_api_key: str | None = None
-    # 合同审查正式 workflow 的 Agent 级 Dify API Key。
-    # 本字段只用于初始化/更新 contract-review Agent 的 config_snapshot，不进入 Dify inputs。
-    contract_review_dify_api_key: str | None = None
-    # 兼容昨天全文实验 workflow 的本地配置；正式配置为空时 seed 可临时回退使用。
-    contract_review_full_context_dify_api_key: str | None = None
-    contract_review_block_loop_dify_api_key: str | None = None
-    # 风控文档抽取：PaddleOCR 负责解析/位置，Qwen 负责语义字段选择。
-    # 是否允许具体 Agent 调用由任务 handler 按 visibility/主体权限判断，不依赖部署 profile。
-    risk_document_extraction_provider: str | None = None
-    # 原始合同/页面图片会发送到外部云服务；只有完成审批后才允许显式开启。
-    risk_document_cloud_egress_enabled: bool = False
-    risk_document_paddleocr_job_url: str = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
-    risk_document_paddleocr_api_token: SecretStr | None = None
-    risk_document_paddleocr_model: str = "PaddleOCR-VL-1.6"
-    risk_document_paddleocr_result_hosts: str = OFFICIAL_PADDLEOCR_RESULT_HOST_PATTERN
-    risk_document_qwen_base_url: str | None = None
-    risk_document_qwen_api_key: SecretStr | None = None
-    risk_document_qwen_model: str = "qwen3.7-plus"
-    risk_document_qwen_input_mode: Literal["ocr_text", "image_and_ocr"] = "ocr_text"
-    # MinIO / S3 兼容对象存储配置
-    object_storage_endpoint: str | None = None
-    object_storage_access_key: str | None = None
-    object_storage_secret_key: str | None = None
-    object_storage_region: str = "us-east-1"
-    object_storage_bucket_raw: str = "int-agenthub-raw"
-    object_storage_bucket_parsed: str = "int-agenthub-parsed"
-    object_storage_presign_expires_seconds: int = 900
     # 火山引擎语音配置（新版控制台，使用 X-Api-Key）
     volc_audio_api_key: str | None = None
     volc_asr_ws_url: str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream"
@@ -144,45 +107,14 @@ class Settings(BaseSettings):
             return []
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
-    @property
-    def risk_document_paddleocr_result_host_list(self) -> list[str]:
-        hosts = [
-            host.strip().lower()
-            for host in self.risk_document_paddleocr_result_hosts.split(",")
-            if host.strip()
-        ]
-        job_host = (urlparse(self.risk_document_paddleocr_job_url).hostname or "").lower()
-        if (
-            job_host == OFFICIAL_PADDLEOCR_JOB_HOST
-            and OFFICIAL_PADDLEOCR_RESULT_HOST_PATTERN not in hosts
-        ):
-            # 官方服务会动态切换带编号的结果 bucket；保留旧精确白名单时也要兼容新编号。
-            hosts.append(OFFICIAL_PADDLEOCR_RESULT_HOST_PATTERN)
-        return hosts
-
     @model_validator(mode="after")
-    def resolve_profile_defaults_and_validate(self) -> "Settings":
-        """生产环境强校验关键密钥，禁止使用公开默认值或带占位标记的弱密钥。
+    def validate_cookie_names_and_production_secrets(self) -> "Settings":
+        """校验 Cookie 名合法性，生产环境强校验关键密钥。
 
         覆盖签发 API Key、登录 token 以及（启用嵌入时）产业互联网 embed 验签密钥，
         避免生产误用代码内置的开发默认值导致凭证可被伪造。
         """
-        if "auth_cookie_name" not in self.model_fields_set:
-            self.auth_cookie_name = (
-                INTERNAL_AUTH_COOKIE_NAME
-                if self.deployment_profile == DeploymentProfile.INTERNAL
-                else EXTERNAL_AUTH_COOKIE_NAME
-            )
         self.auth_cookie_name = _validate_cookie_name("AUTH_COOKIE_NAME", self.auth_cookie_name)
-
-        if "embed_enabled" not in self.model_fields_set:
-            self.embed_enabled = self.deployment_profile == DeploymentProfile.EXTERNAL
-        if "embed_session_cookie_name" not in self.model_fields_set:
-            self.embed_session_cookie_name = (
-                INTERNAL_EMBED_COOKIE_NAME
-                if self.deployment_profile == DeploymentProfile.INTERNAL
-                else EXTERNAL_EMBED_COOKIE_NAME
-            )
         self.embed_session_cookie_name = _validate_cookie_name(
             "EMBED_SESSION_COOKIE_NAME",
             self.embed_session_cookie_name,
