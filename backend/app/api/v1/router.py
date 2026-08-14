@@ -17,26 +17,11 @@ from app.api.v1.endpoints import (
     permissions,
     users,
 )
-from app.api.v1.endpoints.internal import contract_review, file_parse, files, risk_assistant
-from app.core.config import Settings, get_settings
-from app.core.enums import DeploymentProfile
 from app.modules.auth.dependencies import get_current_subject, require_admin_permission
 
 
-def create_api_router(settings: Settings | None = None) -> APIRouter:
-    """创建 API v1 路由表。
-
-    Args:
-        settings: 应用配置。测试可传入显式 Settings，生产启动默认读取环境变量。
-
-    Returns:
-        已按部署 profile 条件注册完成的 APIRouter。
-
-    Boundary:
-        ``/api/v1/internal/*`` 只在 internal profile 下注册，避免外部部署暴露内部
-        合同审查、风控等接口契约。
-    """
-    resolved_settings = settings or get_settings()
+def create_api_router() -> APIRouter:
+    """创建 API v1 路由表。"""
     router = APIRouter()
 
     # auth 是公开接口，不需要 admin 权限
@@ -119,28 +104,6 @@ def create_api_router(settings: Settings | None = None) -> APIRouter:
         tags=["admin-analytics"],
         dependencies=_admin_deps,
     )
-
-    if resolved_settings.deployment_profile == DeploymentProfile.INTERNAL:
-        router.include_router(
-            files.router,
-            prefix="/internal/files",
-            tags=["internal-files"],
-        )
-        router.include_router(
-            file_parse.router,
-            prefix="/internal/file-parse",
-            tags=["internal-file-parse"],
-        )
-        router.include_router(
-            contract_review.router,
-            prefix="/internal/contract-review",
-            tags=["internal-contract-review"],
-        )
-        router.include_router(
-            risk_assistant.router,
-            prefix="/internal/risk-assistant",
-            tags=["internal-risk-assistant"],
-        )
 
     return router
 

@@ -27,7 +27,7 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
     register_exception_handlers(app)
-    app.include_router(create_api_router(settings), prefix=settings.api_v1_prefix)
+    app.include_router(create_api_router(), prefix=settings.api_v1_prefix)
 
     @app.middleware("http")
     async def add_security_headers(request, call_next):

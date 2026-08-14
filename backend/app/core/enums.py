@@ -1,11 +1,6 @@
 from enum import StrEnum
 
 
-class DeploymentProfile(StrEnum):
-    EXTERNAL = "external"
-    INTERNAL = "internal"
-
-
 class ResourceStatus(StrEnum):
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
@@ -61,10 +56,6 @@ class PolicyEffect(StrEnum):
 
 class AgentType(StrEnum):
     QA = "QA"
-    CONTRACT_REVIEW = "CONTRACT_REVIEW"
-    RISK_ASSISTANT = "RISK_ASSISTANT"
-    REPORT_EXTRACTION = "REPORT_EXTRACTION"
-    DOCUMENT_WRITING = "DOCUMENT_WRITING"
 
 
 class RuntimeType(StrEnum):
@@ -95,52 +86,6 @@ class ParseStatus(StrEnum):
     PROCESSING = "PROCESSING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
-
-
-class FileParseTaskStatus(StrEnum):
-    PENDING = "PENDING"
-    RUNNING = "RUNNING"
-    SUCCEEDED = "SUCCEEDED"
-    FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
-
-
-class ContractReviewTaskStatus(StrEnum):
-    PENDING = "PENDING"
-    RUNNING = "RUNNING"
-    SUCCEEDED = "SUCCEEDED"
-    FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
-
-
-class RiskAssessmentTaskStatus(StrEnum):
-    PENDING = "PENDING"
-    RUNNING = "RUNNING"
-    WAITING_REVIEW = "WAITING_REVIEW"
-    SUCCEEDED = "SUCCEEDED"
-    FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
-
-
-class DocumentTypeValidationStatus(StrEnum):
-    MATCHED = "MATCHED"
-    SUSPECTED = "SUSPECTED"
-    UNVERIFIED = "UNVERIFIED"
-
-
-class RiskReviewTargetKind(StrEnum):
-    FIELD = "FIELD"
-    DOCUMENT_TYPE = "DOCUMENT_TYPE"
-
-
-class CounterpartyLevel(StrEnum):
-    A1 = "A1"
-    A2 = "A2"
-    A3 = "A3"
-    A4 = "A4"
-    A5 = "A5"
-    A6 = "A6"
-    A7 = "A7"
 
 
 class InvocationStatus(StrEnum):
@@ -176,10 +121,6 @@ class CallerType(StrEnum):
 
 class OperationType(StrEnum):
     QA = "QA"
-    CONTRACT_REVIEW = "CONTRACT_REVIEW"
-    RISK_ASSESSMENT = "RISK_ASSESSMENT"
-    REPORT_EXTRACTION = "REPORT_EXTRACTION"
-    DOCUMENT_WRITING = "DOCUMENT_WRITING"
 
 
 class LeadStatus(StrEnum):

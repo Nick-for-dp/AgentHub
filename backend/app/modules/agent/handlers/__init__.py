@@ -7,12 +7,6 @@ chat endpoint 按 ``agent.type`` 通过 ``ChatHandlerRegistry`` 选择 **ChatHan
 
 新增非问答**对话类** Agent 时，实现 ``ChatHandler`` 协议并在 ``ChatHandlerRegistry``
 注册即可，无需改动 chat endpoint。
-
-与任务型 Agent 的边界：
-- **ChatHandler**（本包）：SSE 流式对话，可插拔 chat 后处理器（如线索收集）。
-- **TaskHandler**（``modules/agent/task_handlers/``）：任务状态机 + 前处理/核心/后处理
-  流水线（如合同审查）。合同审查等任务型 Agent MUST NOT 注册为 ChatHandler 回退，
-  也不得走 chat 入口执行。
 """
 
 from collections.abc import AsyncIterator, Callable
@@ -52,7 +46,7 @@ class ChatContext:
 
 @runtime_checkable
 class ChatHandler(Protocol):
-    """对话流 ChatHandler 协议（非任务型 TaskHandler）。
+    """对话流 ChatHandler 协议。
 
     handler 负责消费 runtime 流式 chunk、产出 SSE 事件字典、
     在流结束后归一化输出并运行 chat 后处理器，最终由 endpoint 调用
@@ -99,9 +93,6 @@ class ChatHandlerRegistry:
 
     未注册的 agent type 返回明确错误，不静默退化为问答 handler，
     避免错误配置被隐藏。未指定 type 时回退为问答（向后兼容）。
-
-    任务型 type（如 CONTRACT_REVIEW）不得注册于此表作为业务执行入口；
-    任务执行走 ``TaskHandlerRegistry``。
     """
 
     def __init__(self, factories: dict[str, ChatHandlerFactory] | None = None):

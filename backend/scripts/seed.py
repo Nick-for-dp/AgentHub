@@ -1,18 +1,12 @@
-"""按 deployment profile 初始化 AgentHub 最小闭环数据。
+"""初始化 AgentHub external 平台最小闭环数据。
 
 用法：
     cd backend
     python -m scripts.seed
-    python -m scripts.seed --profile external
-    python -m scripts.seed --profile internal
-
-未显式传 ``--profile`` 时使用 ``DEPLOYMENT_PROFILE``。显式值与运行时配置不一致时
-在任何数据库写入前失败，避免同机双实例把数据初始化到错误的 schema。
 """
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 from dataclasses import dataclass, field
@@ -28,7 +22,6 @@ from app.core.enums import (
     APIKeyOwnerType,
     APIKeyStatus,
     AgentType,
-    DeploymentProfile,
     OrgUnitType,
     PolicyEffect,
     PublishStatus,
@@ -59,7 +52,6 @@ from app.modules.org.service import OrgService
 SEED_PLACEHOLDER_DIFY_KEY = "seed-placeholder-not-a-real-key"
 DEFAULT_RUNTIME_APP_ID = "00000000-0000-0000-0000-000000000000"
 DEFAULT_PROVIDER_KB_ID = "00000000-0000-0000-0000-000000000000"
-DEFAULT_CONTRACT_REVIEW_APP_ID = "contract-review-full-context"
 
 
 @dataclass(frozen=True)
@@ -73,8 +65,6 @@ class SeedInputs:
     marketing_runtime_app_id: str
     provider_kb_id: str
     marketing_dify_api_key: str
-    contract_review_runtime_app_id: str
-    contract_review_dify_api_key: str
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "SeedInputs":
@@ -91,21 +81,11 @@ class SeedInputs:
             ),
             provider_kb_id=os.getenv("SEED_PROVIDER_KB_ID", DEFAULT_PROVIDER_KB_ID),
             marketing_dify_api_key=settings.dify_api_key or SEED_PLACEHOLDER_DIFY_KEY,
-            contract_review_runtime_app_id=os.getenv(
-                "CONTRACT_REVIEW_RUNTIME_APP_ID",
-                DEFAULT_CONTRACT_REVIEW_APP_ID,
-            ),
-            contract_review_dify_api_key=(
-                settings.contract_review_dify_api_key
-                or settings.contract_review_full_context_dify_api_key
-                or SEED_PLACEHOLDER_DIFY_KEY
-            ),
         )
 
 
 @dataclass
 class SeedSummary:
-    profile: DeploymentProfile
     admin_phone: str
     admin_key_prefix: str
     admin_key_raw: str | None = None
@@ -115,7 +95,6 @@ class SeedSummary:
     external_key_raw: str | None = None
     agent_codes: list[str] = field(default_factory=list)
     knowledge_base_name: str | None = None
-    contract_review_key_configured: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -137,20 +116,9 @@ class SeedServices:
         )
 
 
-def seed(
-    profile: DeploymentProfile | str | None = None,
-    *,
-    db: Session | None = None,
-    settings: Settings | None = None,
-) -> SeedSummary:
-    """初始化当前 deployment profile，并返回不直接打印的结果摘要。"""
+def seed(*, db: Session | None = None, settings: Settings | None = None) -> SeedSummary:
+    """初始化 external 平台种子数据，并返回不直接打印的结果摘要。"""
     resolved_settings = settings or get_settings()
-    requested_profile = DeploymentProfile(profile or resolved_settings.deployment_profile)
-    if requested_profile != resolved_settings.deployment_profile:
-        raise ValueError(
-            "seed profile must match DEPLOYMENT_PROFILE before database initialization"
-        )
-
     inputs = SeedInputs.from_settings(resolved_settings)
     db_generator = None
     if db is None:
@@ -159,21 +127,14 @@ def seed(
 
     try:
         services = SeedServices.create(db)
-        if requested_profile == DeploymentProfile.EXTERNAL:
-            return _seed_external(services, inputs)
-        return _seed_internal(services, inputs)
+        return _seed_external(services, inputs)
     finally:
         if db_generator is not None:
             db_generator.close()
 
 
 def _seed_external(services: SeedServices, inputs: SeedInputs) -> SeedSummary:
-    admin_user, admin_key, admin_key_raw = _seed_platform_admin(
-        services,
-        inputs,
-        organization_name="AgentHub 运营",
-        department_name=None,
-    )
+    admin_user, admin_key, admin_key_raw = _seed_platform_admin(services, inputs)
 
     external_org = _get_or_create_org(
         services,
@@ -216,7 +177,6 @@ def _seed_external(services: SeedServices, inputs: SeedInputs) -> SeedSummary:
     )
 
     return SeedSummary(
-        profile=DeploymentProfile.EXTERNAL,
         admin_phone=admin_user.phone_normalized or inputs.admin_phone,
         admin_key_prefix=admin_key.key_prefix,
         admin_key_raw=admin_key_raw,
@@ -232,64 +192,15 @@ def _seed_external(services: SeedServices, inputs: SeedInputs) -> SeedSummary:
     )
 
 
-def _seed_internal(services: SeedServices, inputs: SeedInputs) -> SeedSummary:
-    admin_user, admin_key, admin_key_raw = _seed_platform_admin(
-        services,
-        inputs,
-        organization_name="AgentHub 内部",
-        department_name="技术部",
-    )
-    admin_department = services.org.repository.get_org_unit(admin_user.org_unit_id)
-    if admin_department is None:
-        raise RuntimeError("internal administrator department was not created")
-
-    contract_review_agent = _get_or_create_contract_review_agent(
-        services,
-        admin_department,
-        inputs,
-    )
-    risk_agent = _get_or_create_risk_agent(services, admin_department)
-    _ensure_permission(
-        services,
-        subject_type=SubjectType.ORG_UNIT,
-        subject_id=admin_department.id,
-        resource_type=ResourceType.AGENT,
-        resource_id=risk_agent.id,
-        actions=["invoke"],
-    )
-
-    return SeedSummary(
-        profile=DeploymentProfile.INTERNAL,
-        admin_phone=admin_user.phone_normalized or inputs.admin_phone,
-        admin_key_prefix=admin_key.key_prefix,
-        admin_key_raw=admin_key_raw,
-        agent_codes=[contract_review_agent.code, risk_agent.code],
-        contract_review_key_configured=(
-            inputs.contract_review_dify_api_key != SEED_PLACEHOLDER_DIFY_KEY
-        ),
-    )
-
-
 def _seed_platform_admin(
     services: SeedServices,
     inputs: SeedInputs,
-    *,
-    organization_name: str,
-    department_name: str | None,
 ) -> tuple[UserAccount, APIKey, str | None]:
     organization = _get_or_create_org(
         services,
-        name=organization_name,
+        name="AgentHub 运营",
         org_type=OrgUnitType.INTERNAL_COMPANY,
     )
-    owner = organization
-    if department_name:
-        owner = _get_or_create_org(
-            services,
-            name=department_name,
-            org_type=OrgUnitType.INTERNAL_DEPARTMENT,
-            parent_id=organization.id,
-        )
 
     admin_user = next(
         (user for user in services.org.list_users() if user.email == "admin@agenthub.local"),
@@ -298,7 +209,7 @@ def _seed_platform_admin(
     if admin_user is None:
         admin_user = services.org.create_user(
             UserCreate(
-                org_unit_id=owner.id,
+                org_unit_id=organization.id,
                 name="管理员",
                 user_type=UserType.INTERNAL_EMPLOYEE,
                 email="admin@agenthub.local",
@@ -476,89 +387,6 @@ def _get_or_create_marketing_agent(
     return existing
 
 
-def _get_or_create_contract_review_agent(
-    services: SeedServices,
-    owner: OrgUnit,
-    inputs: SeedInputs,
-) -> Agent:
-    existing = next(
-        (agent for agent in services.agent.list_agents() if agent.code == "contract-review"),
-        None,
-    )
-    config = dict(existing.config_snapshot or {}) if existing else {}
-    config.setdefault("input_strategy", "full_context_no_filter")
-    if inputs.contract_review_dify_api_key != SEED_PLACEHOLDER_DIFY_KEY or not config.get(
-        "dify_api_key"
-    ):
-        config["dify_api_key"] = inputs.contract_review_dify_api_key
-
-    if existing is None:
-        existing = services.agent.create_agent(
-            AgentCreate(
-                code="contract-review",
-                name="合同审查 Agent",
-                type=AgentType.CONTRACT_REVIEW,
-                description="内部合同审查 MVP：全文上下文条款抽取与后端规则判敏",
-                owner_org_unit_id=owner.id,
-                runtime_type=RuntimeType.DIFY,
-                runtime_app_id=inputs.contract_review_runtime_app_id,
-                visibility=Visibility.INTERNAL,
-                config_snapshot=config,
-            )
-        )
-    existing.name = "合同审查 Agent"
-    existing.type = AgentType.CONTRACT_REVIEW
-    existing.description = "内部合同审查 MVP：全文上下文条款抽取与后端规则判敏"
-    existing.owner_org_unit_id = owner.id
-    existing.runtime_type = RuntimeType.DIFY
-    existing.runtime_app_id = inputs.contract_review_runtime_app_id
-    existing.publish_status = PublishStatus.PUBLISHED
-    existing.visibility = Visibility.INTERNAL
-    existing.config_snapshot = config
-    services.db.add(existing)
-    services.db.commit()
-    services.db.refresh(existing)
-    return existing
-
-
-def _get_or_create_risk_agent(services: SeedServices, owner: OrgUnit) -> Agent:
-    existing = next(
-        (agent for agent in services.agent.list_agents() if agent.code == "risk-assistant"),
-        None,
-    )
-    config = {
-        "graph": "risk-assessment-graph",
-        "schema_version": "risk-graph-v1",
-    }
-    if existing is None:
-        existing = services.agent.create_agent(
-            AgentCreate(
-                code="risk-assistant",
-                name="风控助手 Agent",
-                type=AgentType.RISK_ASSISTANT,
-                description="内部供应链合同事实核对、确定性规则与人工复核",
-                owner_org_unit_id=owner.id,
-                runtime_type=RuntimeType.CUSTOM,
-                runtime_app_id="risk-assessment-langgraph",
-                visibility=Visibility.INTERNAL,
-                config_snapshot=config,
-            )
-        )
-    existing.name = "风控助手 Agent"
-    existing.type = AgentType.RISK_ASSISTANT
-    existing.description = "内部供应链合同事实核对、确定性规则与人工复核"
-    existing.owner_org_unit_id = owner.id
-    existing.runtime_type = RuntimeType.CUSTOM
-    existing.runtime_app_id = "risk-assessment-langgraph"
-    existing.publish_status = PublishStatus.PUBLISHED
-    existing.visibility = Visibility.INTERNAL
-    existing.config_snapshot = config
-    services.db.add(existing)
-    services.db.commit()
-    services.db.refresh(existing)
-    return existing
-
-
 def _get_or_create_marketing_knowledge_base(
     services: SeedServices,
     owner: OrgUnit,
@@ -642,7 +470,7 @@ def print_seed_summary(
     resolved_settings = settings or get_settings()
     is_production = resolved_settings.environment.strip().lower() in PRODUCTION_ENVIRONMENTS
 
-    print(f"{summary.profile.value} profile 种子数据创建完成。")
+    print("种子数据创建完成。")
     print(f"  管理员手机: {summary.admin_phone}")
     if is_production:
         print(f"  管理员 API Key 前缀: {summary.admin_key_prefix}...")
@@ -653,44 +481,25 @@ def print_seed_summary(
         else:
             print(f"  管理员 API Key 前缀: {summary.admin_key_prefix}...")
 
-    if summary.profile == DeploymentProfile.EXTERNAL:
-        for index, phone in enumerate(summary.external_phones, start=1):
-            print(f"  外部客户 {index} 手机: {phone}")
-            if not is_production and index <= len(summary.external_passwords):
-                print(
-                    f"  外部客户 {index} 密码: {summary.external_passwords[index - 1]} (仅本地演示)"
-                )
-        if is_production or not summary.external_key_raw:
-            print(f"  外部客户 API Key 前缀: {summary.external_key_prefix}...")
-        else:
-            print(f"  外部客户 API Key (仅此一次): {summary.external_key_raw}")
-        if summary.knowledge_base_name:
-            print(f"  KB name: {summary.knowledge_base_name}")
-    elif summary.contract_review_key_configured is not None:
-        status = "已配置" if summary.contract_review_key_configured else "未配置（调用会失败）"
-        print(f"  合同审查 Dify Key: {status}")
+    for index, phone in enumerate(summary.external_phones, start=1):
+        print(f"  外部客户 {index} 手机: {phone}")
+        if not is_production and index <= len(summary.external_passwords):
+            print(
+                f"  外部客户 {index} 密码: {summary.external_passwords[index - 1]} (仅本地演示)"
+            )
+    if is_production or not summary.external_key_raw:
+        print(f"  外部客户 API Key 前缀: {summary.external_key_prefix}...")
+    else:
+        print(f"  外部客户 API Key (仅此一次): {summary.external_key_raw}")
+    if summary.knowledge_base_name:
+        print(f"  KB name: {summary.knowledge_base_name}")
 
     print(f"  Agent codes: {', '.join(summary.agent_codes)}")
 
 
-def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Seed one AgentHub deployment profile.")
-    parser.add_argument(
-        "--profile",
-        choices=[profile.value for profile in DeploymentProfile],
-        help="目标profile；默认使用DEPLOYMENT_PROFILE，显式值必须与其一致。",
-    )
-    return parser.parse_args(argv)
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv)
+def main() -> int:
     settings = get_settings()
-    try:
-        summary = seed(args.profile, settings=settings)
-    except ValueError as exc:
-        print(f"种子数据初始化失败: {exc}", file=sys.stderr)
-        return 2
+    summary = seed(settings=settings)
     print_seed_summary(summary, settings=settings)
     return 0
 
