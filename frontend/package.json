@@ -6,10 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "build:external": "node scripts/build-profiles.mjs external",
-    "build:internal": "node scripts/build-profiles.mjs internal",
-    "build:profiles": "node scripts/build-profiles.mjs external internal",
-    "check:profile-builds": "node scripts/check-profile-builds.mjs",
     "test": "vitest run",
     "preview": "vite preview"
   },

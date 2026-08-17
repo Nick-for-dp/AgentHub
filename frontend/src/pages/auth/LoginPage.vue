@@ -2,9 +2,9 @@
   <main class="login-page">
     <div class="login-card">
       <div class="login-header">
-        <span class="profile-label">{{ deploymentPresentation.environmentLabel }}</span>
-        <h1>{{ deploymentPresentation.productName }}</h1>
-        <p>{{ deploymentPresentation.subtitle }}</p>
+        <span class="profile-label">{{ ENVIRONMENT_LABEL }}</span>
+        <h1>{{ PRODUCT_NAME }}</h1>
+        <p>{{ PRODUCT_SUBTITLE }}</p>
       </div>
 
       <a-form
@@ -59,8 +59,12 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { deploymentPresentation } from '../../config/deploymentProfile'
 import { useAuthStore } from '../../stores/auth'
+
+// external-only 品牌文案固定为常量，不再依赖部署形态配置。
+const PRODUCT_NAME = 'AgentHub 营销智能体'
+const PRODUCT_SUBTITLE = '产品咨询与营销问答服务'
+const ENVIRONMENT_LABEL = '外部服务'
 
 const router = useRouter()
 const auth = useAuthStore()
