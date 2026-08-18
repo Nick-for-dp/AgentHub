@@ -6,8 +6,6 @@
 > ⚠️ **严肃提醒**：所有真实密钥（MySQL 口令、Dify API Key、火山引擎 Key、AUTH_TOKEN_SECRET 等）
 > **只能在服务器上手敲填进 `.env`**，绝不允许出现在 git 仓库、聊天记录、运维群里。Agent.md 第 5/7 节是铁律。
 
-> **部署模式选择**：本文件后续章节保留原有“单一 external 实例”部署方式。若要在同一服务器同时提供 external 营销智能体与 internal 合同审查/风控智能体，请以 [`single-host-dual-profile.md`](single-host-dual-profile.md) 为唯一操作手册；不要混用本文件的单实例 systemd unit、Nginx 配置和共享 `frontend/dist`。
-
 ---
 
 ## 0. 拓扑速览
@@ -295,6 +293,42 @@ curl -s http://agenthub.intra/health
 curl -s http://10.128.140.208/health   # 别名未生效时的兜底
 ```
 
+### 8.1 双栈 HTTPS 启用（iframe 嵌入必需，ADR-021）
+
+默认只开 HTTP `:80`。对接产业互联网 iframe 嵌入时按下述步骤启用 443，形成双栈入口；
+HTTP 通道保留（后台管理 / API Key server-to-server / 健康检查 / 纯 API 联调），
+**不做 80->443 跳转**。
+
+> **前提认知：iframe 嵌入仅 443 通道可用。** embed session Cookie 必须
+> `Secure + SameSite=None`，而浏览器对 HTTP 响应中的 `Secure` Cookie 一律拒收，
+> 此为浏览器强制行为，无配置可绕。
+
+1. **内网 DNS 与证书**：
+   - 向内网 DNS 申请域名指向本机（如 `agenthub.intra.<公司域>`），对接方机器必须能解析，hosts 别名不够；
+   - 用公司 CA 签发服务端证书，SAN 带域名，建议同时带 IP SAN 兜底直连；
+   - 确认对接方测试浏览器信任公司根 CA（域内一般默认信任，先确认）；
+   - 证书/私钥落 `/etc/nginx/`，权限 `600 root:root`。
+2. **Nginx HTTPS 段启用**：`nginx/agenthub.conf` 尾部注释好的 HTTPS 段取消注释，
+   `server_name` 换内网域名、填证书路径；路由与 HTTP 段一致照抄。
+   HTTP 段 `X-Frame-Options: DENY` 保留不动（后端按 `EMBED_ALLOWED_PARENT_ORIGINS`
+   输出 CSP `frame-ancestors`，现代浏览器 CSP 优先，是设计如此）。
+   改完 `sudo nginx -t && sudo systemctl reload nginx`。
+3. **后端 Cookie 两档**（互斥，切换必须 `sudo systemctl restart agenthub-backend`，
+   两档签发的 session 互不通用）：
+
+   | 档 | 配置 | 用途 |
+   |---|---|---|
+   | HTTP 联调档 | `EMBED_COOKIE_SECURE=false` + `EMBED_COOKIE_SAMESITE=lax` | 同站 HTTP 联调阶段 |
+   | HTTPS 正式档 | `EMBED_COOKIE_SECURE=true` + `EMBED_COOKIE_SAMESITE=none` | 跨站 iframe 与生产 |
+
+   双栈下 `AUTH_COOKIE_SECURE` 保持 `false`（后台管理走 HTTP 也要能种 Cookie；
+   可信内网妥协，ADR-021 记录在案）。
+4. **防火墙口径**：80 与 443 放行，源地址用对接方出口网段白名单（不要写 `/0`）；
+   8240（uvicorn loopback）永不对外。变更前后 `sudo ss -tlnp | grep nginx` 留证。
+
+联调三阶段（纯 API 契约 -> 浏览器全链路 HTTP -> 跨站全真 HTTPS）与坑速查见
+`docs/20260814部署联调要点.md`。
+
 ---
 
 ## 9. 日志轮转
@@ -388,7 +422,7 @@ sudo systemctl reload nginx
 
 | 项 | 触发条件 | 对应文档 |
 |---|---|---|
-| HTTPS / Let's Encrypt | 上正式域名时 | `nginx/agenthub.conf` HTTPS 段注释 |
+| 双栈 HTTPS 启用（内网 CA） | 对接产业互联网 iframe 嵌入时 | 本文件 §8.1 |
 | 跨站 iframe Cookie (`Secure=true` / `SameSite=none`) | 产业互联网真实联调时 | PLAN P3 |
 | Redis 接入（token 撤销 / 异步任务） | 业务规模上来后 | DECISIONS.md ADR-011 |
 | 多副本 / 负载均衡 | 单实例扛不住时 | `nginx/agenthub.conf` upstream 段 |

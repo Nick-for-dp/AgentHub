@@ -1,9 +1,7 @@
 import type { RouteRecordRaw } from 'vue-router'
 
-import { deploymentProfile, type DeploymentProfile } from '../config/deploymentProfile'
-
-export function createAppRoutes(profile: DeploymentProfile = deploymentProfile): RouteRecordRaw[] {
-  const routes: RouteRecordRaw[] = [
+export function createAppRoutes(): RouteRecordRaw[] {
+  return [
     {
       path: '/',
       redirect: '/login',
@@ -58,34 +56,4 @@ export function createAppRoutes(profile: DeploymentProfile = deploymentProfile):
       ],
     },
   ]
-
-  if (__INTERNAL_BUILD__ && profile === 'internal') {
-    const internalChildren: RouteRecordRaw[] = [
-      {
-        path: '',
-        redirect: '/internal/contract-review',
-      },
-      {
-        path: 'contract-review',
-        component: () => import('../pages/internal/ContractReviewPage.vue'),
-      },
-      {
-        path: 'risk-assistant',
-        component: () => import('../pages/internal/RiskAssistantPage.vue'),
-      },
-      {
-        path: 'risk-assistant/tasks/:taskId',
-        component: () => import('../pages/internal/RiskAssistantPage.vue'),
-        props: true,
-      },
-    ]
-    routes.push({
-      path: '/internal',
-      component: () => import('../layouts/InternalLayout.vue'),
-      meta: { requiresAuth: true },
-      children: internalChildren,
-    })
-  }
-
-  return routes
 }

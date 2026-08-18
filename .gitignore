@@ -115,6 +115,7 @@ CHANGELOG.md
 .claude/
 ag.md
 laok.md
+checkpoint.md
 # 本机 OpenSpec / agent 工具链 skill 与命令，不入库
 .codex/
 .codex-tmp/

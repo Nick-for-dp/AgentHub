@@ -7,7 +7,6 @@ import {
   refreshSession as apiRefreshSession,
 } from '../api/auth'
 import type { SessionResponse, SessionStatusResponse, UserSummary } from '../api/auth'
-import { getDefaultHomePath } from '../config/deploymentProfile'
 
 const DEFAULT_REFRESH_SKEW_MS = 5 * 60 * 1000
 const CHAT_STREAM_MIN_TTL_MS = 10 * 60 * 1000
@@ -34,7 +33,10 @@ export const useAuthStore = defineStore('auth', () => {
   const isAccessExpired = computed(() => accessExpiresAt.value > 0 && Date.now() >= accessExpiresAt.value)
   const isAccessExpiringSoon = computed(() => shouldRefreshSession(DEFAULT_REFRESH_SKEW_MS))
   const isIdleExpired = computed(() => idleExpiresAt.value > 0 && Date.now() >= idleExpiresAt.value)
-  const defaultHomePath = computed(() => getDefaultHomePath(Boolean(currentUser.value?.is_admin)))
+  // external-only：普通用户进聊天页，管理员进管理端 Agent 列表。
+  const defaultHomePath = computed(() =>
+    currentUser.value?.is_admin ? '/admin/agents' : '/chat',
+  )
 
   async function login(phone: string, password: string): Promise<void> {
     const resp = await apiLogin({ phone, password })
