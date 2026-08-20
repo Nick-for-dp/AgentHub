@@ -16,9 +16,15 @@
 
 # ─────────────────────────────────────────────
 # Nginx 日志（与 deploy/nginx/agenthub.conf 的 access_log/error_log 一致）
+# 三段式端口布局对应三组日志：客户面（agenthub.*）、公网嵌入（agenthub.public.*）、
+# 管理面（agenthub.admin.*）。
 # ─────────────────────────────────────────────
 /var/log/nginx/agenthub.access.log
 /var/log/nginx/agenthub.error.log
+/var/log/nginx/agenthub.public.access.log
+/var/log/nginx/agenthub.public.error.log
+/var/log/nginx/agenthub.admin.access.log
+/var/log/nginx/agenthub.admin.error.log
 {
     daily                 # 按天切割
     missingok             # 文件不存在不报错（首次部署还没生成日志时）

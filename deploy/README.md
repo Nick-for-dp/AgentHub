@@ -11,20 +11,21 @@
 ## 0. 拓扑速览
 
 ```
-公司内网（10.128.x.x）
+公司内网（10.128.x.x）                    公网
 ┌──────────────────────────────┐    ┌──────────────────────────────┐
 │  AgentHub 应用机              │    │  MySQL 数据机                 │
 │  10.128.140.208               │    │  10.128.140.211:3306          │
 │  agenthub.intra               │◄───┤  mysql.intra                  │
 │                              │    │  库: agenthub                 │
-│  - Nginx :80  (公开)          │    │  账号: agenthub               │
-│  - uvicorn :8240 (仅本机)     │    │  备份账号: agenthub_backup     │
-│  - systemd: agenthub-backend  │    └──────────────────────────────┘
+│  - Nginx :80  客户面+公网嵌入  │    │  账号: agenthub               │
+│  - Nginx :81  管理后台(仅内网) │    │  备份账号: agenthub_backup     │
+│  - uvicorn :8240 (仅本机)     │    └──────────────────────────────┘
+│  - systemd: agenthub-backend  │
 └──────────┬───────────────────┘
-           │
-           ▼
-┌──────────────────────────────┐
-│  Dify runtime（已就绪）       │
+           │                          公网入口（ADR-022 网关 TLS 卸载）：
+           ▼                          公网 443 → 公司网关(证书/解密) → 208:80
+┌──────────────────────────────┐      （agent.zjmi56.com，仅嵌入路径，
+│  Dify runtime（已就绪）       │       详见 deploy/public-embed.md）
 │  10.128.140.209:8200          │
 │  dify.intra                   │
 └──────────────────────────────┘
@@ -32,7 +33,7 @@
 
 | 机器 | 内网 IP | 别名 | 端口 | 状态 |
 |---|---|---|---|---|
-| AgentHub 应用机 | `10.128.140.208` | `agenthub.intra` | 80 (Nginx) / 8240 (本机 uvicorn) | 本次部署目标 |
+| AgentHub 应用机 | `10.128.140.208` | `agenthub.intra` | 80 (客户面+公网嵌入) / 81 (管理后台，仅内网) / 8240 (本机 uvicorn) | 本次部署目标 |
 | MySQL | `10.128.140.211` | `mysql.intra` | 3306 | ✅ 已就绪 |
 | Dify | `10.128.140.209` | `dify.intra` | 8200 | ✅ 已就绪 |
 
@@ -43,9 +44,10 @@
 ```
 deploy/
 ├── README.md                          ★ 本文件，部署主入口
+├── public-embed.md                    公网嵌入上线 Runbook（agent.zjmi56.com，ADR-022）
 ├── hosts.example                      内网 hosts 别名配置样例
 ├── nginx/
-│   └── agenthub.conf                  Nginx 站点配置（HTTP 段启用 / HTTPS 段冷藏）
+│   └── agenthub.conf                  Nginx 站点配置（三段式：80公网嵌入/80内网客户/81管理）
 ├── systemd/
 │   └── agenthub-backend.service       后端 systemd unit
 ├── logrotate/
@@ -274,6 +276,16 @@ curl -s http://127.0.0.1:8240/health
 
 ## 8. 安装 Nginx 站点
 
+`deploy/nginx/agenthub.conf` 是**三段式端口布局**（ADR-022 2026-08-20 实施修正）：
+
+| 块 | 监听 | server_name | 承载 |
+|---|---|---|---|
+| 公网嵌入块 | 80 | `agent.zjmi56.com` | 仅嵌入问答必需路径（`/embed/`、`/api/v1/embed/`、`/api/v1/chat/`、`/api/v1/audio/`），其余 404。经公司网关 TLS 卸载转发而来，无公网映射时天然惰性 |
+| 内网客户块 | 80（默认兜底） | `agenthub.intra`、`10.128.140.208` | 客户聊天/登录/联调/健康检查；`/admin` 与 `/api/v1/admin/` 404 |
+| 内网管理块 | 81 | `agenthub.intra`、`10.128.140.208` | 完整站点含管理后台；**仅内网，公网永不映射 81** |
+
+安装：
+
 ```bash
 sudo install -m 644 /opt/agenthub/deploy/nginx/agenthub.conf \
                     /etc/nginx/sites-available/agenthub.conf
@@ -288,46 +300,37 @@ sudo systemctl reload nginx
 内网另一台机器测试：
 
 ```bash
-curl -I http://agenthub.intra/
-curl -s http://agenthub.intra/health
-curl -s http://10.128.140.208/health   # 别名未生效时的兜底
+curl -I http://agenthub.intra/          # 200，客户面
+curl -s http://agenthub.intra/health    # {"status":"ok"}
+curl -s http://10.128.140.208/health    # 别名未生效时的兜底
+curl -I http://agenthub.intra:81/admin  # 200，管理后台新地址
+curl -I http://agenthub.intra/admin     # 404，80 已无管理面
+sudo ss -tlnp | grep nginx              # 应恰见 80 与 81；8240 仅 127.0.0.1
 ```
 
-### 8.1 双栈 HTTPS 启用（iframe 嵌入必需，ADR-021）
+### 8.1 公网嵌入（agent.zjmi56.com，ADR-022 网关 TLS 卸载形态）
 
-默认只开 HTTP `:80`。对接产业互联网 iframe 嵌入时按下述步骤启用 443，形成双栈入口；
-HTTP 通道保留（后台管理 / API Key server-to-server / 健康检查 / 纯 API 联调），
-**不做 80->443 跳转**。
+> 公网入口形态：公司网关挂证书、终止 TLS，公网 443 解密后明文转发 208:80；
+> 208 不开 443、不管证书。管理后台在 81 端口与公网面端口级隔离。
+> 完整前置条件、联调三阶段、验证清单与回滚见 `deploy/public-embed.md`。
 
-> **前提认知：iframe 嵌入仅 443 通道可用。** embed session Cookie 必须
-> `Secure + SameSite=None`，而浏览器对 HTTP 响应中的 `Secure` Cookie 一律拒收，
-> 此为浏览器强制行为，无配置可绕。
+要点速览：
 
-1. **内网 DNS 与证书**：
-   - 向内网 DNS 申请域名指向本机（如 `agenthub.intra.<公司域>`），对接方机器必须能解析，hosts 别名不够；
-   - 用公司 CA 签发服务端证书，SAN 带域名，建议同时带 IP SAN 兜底直连；
-   - 确认对接方测试浏览器信任公司根 CA（域内一般默认信任，先确认）；
-   - 证书/私钥落 `/etc/nginx/`，权限 `600 root:root`。
-2. **Nginx HTTPS 段启用**：`nginx/agenthub.conf` 尾部注释好的 HTTPS 段取消注释，
-   `server_name` 换内网域名、填证书路径；路由与 HTTP 段一致照抄。
-   HTTP 段 `X-Frame-Options: DENY` 保留不动（后端按 `EMBED_ALLOWED_PARENT_ORIGINS`
-   输出 CSP `frame-ancestors`，现代浏览器 CSP 优先，是设计如此）。
-   改完 `sudo nginx -t && sudo systemctl reload nginx`。
-3. **后端 Cookie 两档**（互斥，切换必须 `sudo systemctl restart agenthub-backend`，
-   两档签发的 session 互不通用）：
+- iframe 嵌入仅公网 HTTPS 通道可用（embed Cookie 须 `Secure + SameSite=None`，
+  浏览器对 HTTP 响应中的 `Secure` Cookie 一律拒收，此为浏览器强制行为）。
+- 后端 embed Cookie 两档互斥，切换必须 `sudo systemctl restart agenthub-backend`：
 
-   | 档 | 配置 | 用途 |
-   |---|---|---|
-   | HTTP 联调档 | `EMBED_COOKIE_SECURE=false` + `EMBED_COOKIE_SAMESITE=lax` | 同站 HTTP 联调阶段 |
-   | HTTPS 正式档 | `EMBED_COOKIE_SECURE=true` + `EMBED_COOKIE_SAMESITE=none` | 跨站 iframe 与生产 |
+  | 档 | 配置 | 用途 |
+  |---|---|---|
+  | HTTP 联调档 | `EMBED_COOKIE_SECURE=false` + `EMBED_COOKIE_SAMESITE=lax` | 同站 HTTP 联调阶段 |
+  | HTTPS 正式档 | `EMBED_COOKIE_SECURE=true` + `EMBED_COOKIE_SAMESITE=none` | 跨站 iframe 与生产 |
 
-   双栈下 `AUTH_COOKIE_SECURE` 保持 `false`（后台管理走 HTTP 也要能种 Cookie；
-   可信内网妥协，ADR-021 记录在案）。
-4. **防火墙口径**：80 与 443 放行，源地址用对接方出口网段白名单（不要写 `/0`）；
-   8240（uvicorn loopback）永不对外。变更前后 `sudo ss -tlnp | grep nginx` 留证。
-
-联调三阶段（纯 API 契约 -> 浏览器全链路 HTTP -> 跨站全真 HTTPS）与坑速查见
-`docs/20260814部署联调要点.md`。
+  双栈下 `AUTH_COOKIE_SECURE` 保持 `false`（内网管理通道走 HTTP 也要能种 Cookie；
+  可信内网妥协，ADR-021 记录在案）。
+- 公网流量的真实客户端 IP 在多层 XFF 链中不可可靠还原：公网块全链记录 XFF 日志，
+  限流只做按网关整体的粗粒度防洪；来源白名单只能在网关边缘做。
+- 纯内网 HTTPS 双栈模板已从 conf 移除；若未来出现纯内网 iframe 嵌入需求，
+  按 ADR-021 原则另行启用，模板可从 git 历史找回。
 
 ---
 
@@ -388,10 +391,12 @@ sudo systemctl restart cron
 依次在内网另一台机器（或本机浏览器 + 内网代理）执行：
 
 - [ ] `curl http://agenthub.intra/health` 返回 `{"status":"ok"}`
+- [ ] `sudo ss -tlnp | grep nginx` 恰见 80 与 81；8240 仅监听 127.0.0.1
+- [ ] 端口分工正确：`curl -I http://agenthub.intra/admin` 与 `curl http://agenthub.intra/api/v1/admin/agents` 均 404；`curl -I http://agenthub.intra:81/admin` 200
 - [ ] 浏览器打开 `http://agenthub.intra/`，看到登录页
 - [ ] 用 seed 初始化的演示账号登录成功（如未跑 seed：`uv run python scripts/seed.py`）
 - [ ] 进入聊天页，发一条消息，SSE 流式响应正常（Dify 接通）
-- [ ] 管理端"调用记录"页能看到刚才那次问答的 `snapshot.retrieval / model / runtime` 三段
+- [ ] 管理端"调用记录"页（`http://agenthub.intra:81/admin`）能看到刚才那次问答的 `snapshot.retrieval / model / runtime` 三段
 - [ ] 浏览器刷新后会话恢复，消息历史完整
 - [ ] 各页面时间显示为北京时间（+08:00）
 - [ ] `sudo systemctl restart agenthub-backend && curl http://agenthub.intra/health` 仍然 ok
@@ -422,11 +427,12 @@ sudo systemctl reload nginx
 
 | 项 | 触发条件 | 对应文档 |
 |---|---|---|
-| 双栈 HTTPS 启用（内网 CA） | 对接产业互联网 iframe 嵌入时 | 本文件 §8.1 |
+| 公网嵌入联调与上线收尾 | 博采 origin / 密钥对齐后 | `deploy/public-embed.md` |
+| 纯内网 HTTPS 双栈（内网 iframe 嵌入） | 出现纯内网嵌入需求时 | ADR-021，模板见 git 历史 |
 | 跨站 iframe Cookie (`Secure=true` / `SameSite=none`) | 产业互联网真实联调时 | PLAN P3 |
 | Redis 接入（token 撤销 / 异步任务） | 业务规模上来后 | DECISIONS.md ADR-011 |
 | 多副本 / 负载均衡 | 单实例扛不住时 | `nginx/agenthub.conf` upstream 段 |
-| WAF / 安全头加固（CSP / HSTS / Referrer-Policy） | 暴露到非可信网络时 | PLAN P6 |
+| WAF / 安全头加固（CSP 收窄至 embed 路径等） | 暴露面扩大时 | PLAN P6 |
 
 ---
 
@@ -434,6 +440,7 @@ sudo systemctl reload nginx
 
 | 现象 | 第一步看 |
 |---|---|
+| 管理后台打不开 | 地址已迁至 `http://agenthub.intra:81/admin`；80 端口 `/admin` 404 是设计如此（§8） |
 | `systemctl status` 显示 failed | `journalctl -u agenthub-backend -n 200` |
 | 502 Bad Gateway | 后端没起来，看 systemd 日志；或端口被占 `ss -tlnp \| grep 8240` |
 | 前端白屏 | 看浏览器 console 与 network；多半是 `index.html` 缓存或 dist 没传上来 |
