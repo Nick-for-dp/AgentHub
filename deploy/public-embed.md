@@ -1,5 +1,13 @@
 # 208 公网嵌入上线 Runbook（agent.zjmi56.com，ADR-022，网关 TLS 卸载形态）
 
+> 2026-08-24 更新：博采 origin 已对齐（生产 `https://my.zjmi56.com`、联调 `http://118.178.242.227:3000`），
+> 三处白名单（nginx conf / 后端 .env / 前端构建）已落地；补齐嵌入页静态响应的 CSP 通道（见 §5.2/§6）。
+> 共享密钥与网关侧确认项仍按 §0 状态跟踪。
+>
+> 2026-09-03 更新：公网块路径白名单补 `/api/v1/conversations`——联调发现嵌入页会话 XHR
+> 全部 404（页面路径全程 200，真正断点在页面依赖的 API），详见 §5.4/§6 与
+> ADR-022 实施修正（2026-09-03）。验证口径修正为「页面路径 + 页面依赖的全部 XHR 路径」。
+
 目标：208 开通公网入口，产业互联网（博采，HTTPS）iframe 嵌入营销智能体。
 形态：**公司网关做 TLS 卸载**——证书挂网关，公网 443 解密后明文转发 208:80；
 208 不开 443、不管证书。管理后台在 81 端口（仅内网），与公网面端口级隔离。
@@ -17,7 +25,7 @@
 | 6 | 网关不缓冲 SSE/chunked、长连接空闲超时 ≥10 分钟 | 联调专项实测（第 5.3 节） | 🟡 口头支持，实测兜底 |
 | 7 | 网关单请求体上限 ≥20MB（语音上传 15MB） | 网络组回执 | ✅ 已确认（>20MB） |
 | 8 | **81 端口永不映射公网**（管理面端口隔离的前提） | 网络组回执 | ⏳ 待书面确认 |
-| 9 | 博采生产父页面 origin + 联调页面 origin（`协议://主机[:端口]`，逐字，无路径无尾斜杠） | 博采对接人 | ⏳ 待提供 |
+| 9 | 博采生产父页面 origin + 联调页面 origin（`协议://主机[:端口]`，逐字，无路径无尾斜杠） | 博采对接人 | ✅ 2026-08-24 已提供：生产 `https://my.zjmi56.com`，联调 `http://118.178.242.227:3000` |
 | 10 | embed token 参数对齐：`iss=industrial-internet`、`aud=agenthub`、HS256 共享密钥（我方生成，安全渠道送达博采后端） | `docs/20260617对接文档.md` §7 | ⏳ 待对齐 |
 | 11 | 博采开发出口 IP：`39.183.172.64`（联调白名单用） | 博采对接人 | ✅ 已提供 |
 | 12 | 联调白名单在**网关边缘**做源 IP ACL（208 拿不到可靠真实来源，无法在本地做） | 网络组 | ⏳ 待回执；做不了则见第 8 节兜底 |
@@ -36,7 +44,7 @@
 ```bash
 cd /opt/agenthub/frontend
 # frontend/.env 追加一行（逗号分隔：博采生产 origin + 联调 origin，逐字）
-#   VITE_EMBED_ALLOWED_PARENT_ORIGINS=https://<博采平台域名>,<联调 origin>
+#   VITE_EMBED_ALLOWED_PARENT_ORIGINS=https://my.zjmi56.com,http://118.178.242.227:3000
 sudo -u agenthub npm ci
 sudo -u agenthub npm run build
 # 产物 /opt/agenthub/frontend/dist
@@ -50,7 +58,7 @@ sudo -u agenthub npm run build
 
 | 块 | 监听 | server_name | 承载 |
 |---|---|---|---|
-| 公网嵌入块 | 80 | `agent.zjmi56.com` | 仅 `/embed/`、`/assets/`、`/api/v1/embed/`、`/api/v1/chat/`、`/api/v1/audio/`，其余 404 |
+| 公网嵌入块 | 80 | `agent.zjmi56.com` | 仅 `/embed/`、`/assets/`、`/api/v1/embed/`、`/api/v1/chat/`、`/api/v1/audio/`、`/api/v1/conversations*`（会话恢复/列表/新建，2026-09-03 补），其余 404 |
 | 内网客户块 | 80（default） | `agenthub.intra`、`10.128.140.208`、`_` | 客户聊天/登录/联调/健康检查；`/admin` 与 `/api/v1/admin/` 404 |
 | 内网管理块 | 81 | `agenthub.intra`、`10.128.140.208`、`_` | 完整站点含管理后台，仅内网 |
 
@@ -73,10 +81,18 @@ EMBED_COOKIE_SAMESITE=none
 EMBED_EXTERNAL_TOKEN_SECRET=<我方生成，secrets.token_urlsafe(48)，安全渠道发博采后端>
 EMBED_EXTERNAL_TOKEN_ISSUER=industrial-internet
 EMBED_EXTERNAL_TOKEN_AUDIENCE=agenthub
-EMBED_ALLOWED_PARENT_ORIGINS=https://<博采平台域名>,<联调 origin>
+EMBED_ALLOWED_PARENT_ORIGINS=https://my.zjmi56.com,http://118.178.242.227:3000
 CORS_ALLOWED_ORIGINS=https://agent.zjmi56.com
 # AUTH_COOKIE_SECURE 保持 false（内网 80/81 管理通道用 HTTP，公网不承载管理登录）
 ```
+
+> ⚠️ 白名单是**三处**同一份值，缺一处嵌入链路不完整：
+> 1. 后端 `.env` 的 `EMBED_ALLOWED_PARENT_ORIGINS`（本节）——控制 `/api/` 响应的 CSP；
+> 2. 前端构建 `frontend/.env` 的 `VITE_EMBED_ALLOWED_PARENT_ORIGINS`（§1）——iframe 内 postMessage origin 校验；
+> 3. `deploy/nginx/agenthub.conf` 公网块的 `Content-Security-Policy`（§2）——嵌入页 index.html 由 nginx 直返、
+>    不经后端中间件，静态响应必须由 nginx 显式输出 CSP（含 `location = /index.html`，该 location 自带
+>    add_header 不继承 server 级，且 try_files 会把 /embed/ 重定向到这里，是嵌入页真正的响应点）。
+> 三条 CSP 头并存按交集生效，三处值不一致会把白名单收窄。
 
 ```bash
 sudo systemctl restart agenthub-backend
@@ -99,11 +115,13 @@ sudo ss -tlnp | grep nginx
 网关做不了时的兜底：联调期靠「路径收缩 + 粗粒度限流 + embed token 校验」单防线，
 **上线前必须重新评估**（第 8 节）。
 
-### 5.2 嵌入方 origin 配置（两处都已含联调 origin）
+### 5.2 嵌入方 origin 配置（三处，2026-08-24 已全部落地为实际值）
 
-第 1 步（前端构建）与第 3 步（后端 .env）的 ORIGINS 均为逗号分隔列表，联调 origin
-一并写入。漏配表现：iframe 白屏，浏览器控制台报 origin 校验失败；后端 CSP
-`frame-ancestors` 不含该 origin 时浏览器直接拒嵌。
+白名单共三处（见 §3 说明）：第 1 步前端构建、第 3 步后端 `.env`、以及 nginx 公网块 conf
+（§2）。三处均含联调 origin `http://118.178.242.227:3000` 与生产 origin `https://my.zjmi56.com`。
+
+漏配表现：iframe 白屏，浏览器控制台报 origin 校验失败；嵌入页 HTML 响应缺 CSP
+`frame-ancestors` 白名单（nginx 未同步）时，无 CSP 的浏览器层强制只靠前端 JS 校验。
 
 ### 5.3 三阶段联调
 
@@ -125,7 +143,9 @@ curl -X POST https://agent.zjmi56.com/api/v1/embed/exchange \
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| iframe 白屏 | 父页面 origin 不在两处 ORIGINS 配置（逐字校验，端口/尾斜杠都算） | 核对第 1/3 步，改前端须重新构建 |
+| iframe 白屏 | 父页面 origin 不在三处 ORIGINS 配置（逐字校验，端口/尾斜杠都算；前端改须重新构建，nginx conf 改须 reload） | 核对 §1/§2/§3 三处 |
+| iframe 白屏（2026-08-24 新增坑） | 嵌入页 HTML 响应缺 CSP：公网块 `location = /index.html` 自带 add_header，吞掉 server 级头，CSP 必须在该 location 内显式输出 | 确认 conf 已含 §6 的 CSP 复验行 |
+| 嵌入页打开但会话接口 404（2026-09-03 实例：`/api/v1/conversations/current` 与列表 XHR） | 公网块路径白名单缺项：会话接口组漏列，落 `location /` 兜底 404；页面路径 200 不代表页面可用 | 核对 agenthub.conf 公网块 location 清单与 §2 承载表是否一致 |
 | exchange 401 | JWT 签名/iss/aud/过期时间不符 | 按对接文档 §7 对齐 |
 | 聊天返回 mock 应答 | Agent 的 Dify Key 未配/失效 | 管理端（:81）核对 Agent 配置快照 |
 | SSE 一次性返回而非逐字 | 网关缓冲了 chunked 响应 | 找网络组关停对该域名的响应缓冲 |
@@ -133,9 +153,17 @@ curl -X POST https://agent.zjmi56.com/api/v1/embed/exchange \
 | 上传语音 413 | 网关请求体上限 <20MB | 找网络组调大 |
 | 偶发 429 | 粗粒度限流阈值偏紧 | 视联调人数调 `agenthub_public` zone |
 
+> **网关侧事实（2026-09-03 联调确认，记录在案）**：公司网关实际为长亭雷池 WAF
+> （SafeLine-CE，源 `10.128.140.161`）。其一，雷池每分钟对 `agent.zjmi56.com` 发
+> `GET /` 健康探测，公网块按设计恒回 404——access log 中的规律 404 记录是探测流量，
+> 勿误判为业务故障。其二，雷池对透传响应自种 `sl-session` cookie（`SameSite=None;
+> Secure`），对嵌入链路无阻碍，但排查 iframe 会话/Cookie 问题时需知晓此 cookie 非
+> 我方签发。
+
 ### 5.5 联调完成后
 
-1. 两处 ORIGINS 移除联调 origin（保留博采生产 origin），**前端需重新构建一次**
+1. 三处 ORIGINS 移除联调 origin `http://118.178.242.227:3000`（保留 `https://my.zjmi56.com`）：
+   **前端需重新构建一次、nginx conf 需 reload、后端 .env 需重启**
 2. 白名单去留决策（第 8 节）
 3. 按第 6 节验证清单全量过一遍
 
@@ -146,8 +174,14 @@ curl -X POST https://agent.zjmi56.com/api/v1/embed/exchange \
 ```bash
 # 嵌入页可达
 curl -I https://agent.zjmi56.com/embed/chat                       # 200
-# embed API 通（未带会话 401 属正常，证明路由通）
-curl https://agent.zjmi56.com/api/v1/embed/session                # 401
+# ★ 嵌入页静态响应必须带 CSP 白名单（nginx 直返，不经后端）
+curl -sI https://agent.zjmi56.com/embed/chat | grep -i content-security-policy
+#   期望：content-security-policy: frame-ancestors https://my.zjmi56.com http://118.178.242.227:3000
+# embed API 通（无 cookie 时恒 200 {"authenticated":false}，属设计行为）
+curl https://agent.zjmi56.com/api/v1/embed/session                # 200 {"authenticated":false}
+# ★ 会话 API 通（无凭证 401 = 路径通且认证生效，属正确状态）：conversations 挂认证
+# 依赖，与 embed/session 无 cookie 恒 200 的设计不同；若返回 404 则是公网块白名单缺项
+curl -i 'https://agent.zjmi56.com/api/v1/conversations/current?agent_code=qa'   # 401
 # ★ 头号项：管理面必须全部被挡（404）——Host 分流 + 端口隔离双保险实测
 curl https://agent.zjmi56.com/admin                               # 404
 curl https://agent.zjmi56.com/api/v1/admin/agents                 # 404

@@ -280,7 +280,7 @@ curl -s http://127.0.0.1:8240/health
 
 | 块 | 监听 | server_name | 承载 |
 |---|---|---|---|
-| 公网嵌入块 | 80 | `agent.zjmi56.com` | 仅嵌入问答必需路径（`/embed/`、`/api/v1/embed/`、`/api/v1/chat/`、`/api/v1/audio/`），其余 404。经公司网关 TLS 卸载转发而来，无公网映射时天然惰性 |
+| 公网嵌入块 | 80 | `agent.zjmi56.com` | 仅嵌入问答必需路径（`/embed/`、`/api/v1/embed/`、`/api/v1/chat/`、`/api/v1/audio/`、`/api/v1/conversations*`），其余 404。经公司网关 TLS 卸载转发而来，无公网映射时天然惰性 |
 | 内网客户块 | 80（默认兜底） | `agenthub.intra`、`10.128.140.208` | 客户聊天/登录/联调/健康检查；`/admin` 与 `/api/v1/admin/` 404 |
 | 内网管理块 | 81 | `agenthub.intra`、`10.128.140.208` | 完整站点含管理后台；**仅内网，公网永不映射 81** |
 
