@@ -1,5 +1,5 @@
 <template>
-  <main class="chat-page">
+  <main class="chat-page" :class="{ 'chat-page-embed': isEmbedMode }">
     <!-- 历史会话侧边栏 -->
     <aside
       v-if="showConversationChrome"
@@ -2105,6 +2105,24 @@ async function send() {
 .error-bar {
   border-radius: 0;
   margin: 0;
+}
+
+/* ---- 嵌入模式（iframe /embed/chat）----
+ * 博采父页面 iframe 嵌入出现双滚动条：根因是 28px padding 与面板
+ * min-height: 640px 在矮 iframe 下把文档撑高。嵌入模式统一贴边填满
+ * iframe 视口，滚动只保留在消息列表内部；第一方 /chat 样式零改动。
+ * 须置于 sidebar-hidden-panel / sidebar-collapsed 圆角规则之后，
+ * 否则侧栏折叠时圆角会重新生效；移动端媒体查询仅重排版，值兼容。 */
+.chat-page-embed {
+  padding: 0;
+}
+
+.chat-page-embed .chat-panel,
+.chat-page-embed .conversation-sidebar {
+  height: 100dvh;
+  min-height: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 @media (max-width: 767px) {
