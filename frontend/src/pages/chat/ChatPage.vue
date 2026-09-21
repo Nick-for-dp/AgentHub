@@ -127,7 +127,7 @@
         <!-- 未登录时的引导提示 -->
         <div v-if="!canChat" class="hint-banner">
           <template v-if="isEmbedMode">
-            请先登录官网
+            请先登录
           </template>
           <a-button v-else type="primary" @click="$router.push('/login')">请先登录</a-button>
         </div>
@@ -135,7 +135,7 @@
         <!-- 无消息时的欢迎 -->
         <div v-else-if="messages.length === 0 && !loading" class="welcome-banner">
           <RobotOutlined class="welcome-icon" />
-          <p class="welcome-text">向「{{ agentCode }}」Agent 提问</p>
+          <p class="welcome-text">请提问</p>
           <p class="welcome-hint">{{ restoringConversation ? '正在恢复对话...' : '智能问答助手已就绪' }}</p>
         </div>
 
@@ -160,7 +160,10 @@
               </span>
               <span class="workflow-copy">
                 <span class="workflow-title">{{ getWorkflowTitle(msg) }}</span>
-                <span class="workflow-detail">{{ getWorkflowDetail(msg) }}</span>
+                <span
+                  v-if="getWorkflowStatus(msg) !== 'finished'"
+                  class="workflow-detail"
+                >{{ getWorkflowDetail(msg) }}</span>
               </span>
               <span class="workflow-count">{{ getWorkflowCountText(msg) }}</span>
               <DownOutlined
@@ -327,6 +330,8 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   }
 })
 
+const USER_ERROR_MESSAGE = '抱歉，出错了'
+
 function renderMarkdown(text: string): string {
   if (!text) return ''
   const rawHtml = marked(text) as string
@@ -457,8 +462,8 @@ function getWorkflowStatus(message: Message): 'running' | 'finished' | 'failed' 
 function getWorkflowTitle(message: Message): string {
   const status = getWorkflowStatus(message)
   if (status === 'failed') return '工作流执行失败'
-  if (status === 'finished') return '工作流已完成'
-  return '工作流正在执行'
+  if (status === 'finished') return '已完成'
+  return '正在搜索'
 }
 
 function getWorkflowDetail(message: Message): string {
@@ -637,7 +642,7 @@ async function deleteConversationItem(id: string): Promise<void> {
       syncConversationUrl(null)
     }
   } catch {
-    errorMsg.value = '删除会话失败，请稍后重试'
+    errorMsg.value = USER_ERROR_MESSAGE
   } finally {
     deletingConversationId.value = null
   }
@@ -665,11 +670,12 @@ async function switchConversation(id: string): Promise<void> {
     messages.value = storedMessages
       .map(mapConversationMessage)
       .filter((item): item is Message => item !== null)
+    expandedSteps.value = {}
     syncConversationUrl(conversation.id)
     await scrollBottom()
   } catch {
     if (requestSeq !== switchRequestSeq) return
-    errorMsg.value = '切换会话失败，请稍后重试'
+    errorMsg.value = USER_ERROR_MESSAGE
   } finally {
     if (requestSeq === switchRequestSeq) {
       switchingConversationId.value = null
@@ -699,10 +705,11 @@ async function restoreCurrentConversation(): Promise<void> {
     messages.value = storedMessages
       .map(mapConversationMessage)
       .filter((item): item is Message => item !== null)
+    expandedSteps.value = {}
     syncConversationUrl(conversationId.value)
     await scrollBottom()
   } catch {
-    errorMsg.value = '恢复对话失败，请稍后重试'
+    errorMsg.value = USER_ERROR_MESSAGE
   } finally {
     restoringConversation.value = false
   }
@@ -878,9 +885,9 @@ function startSpeechInput(event?: PointerEvent): void {
       speechPointerId = null
       void finishSpeechInput(text)
     },
-    onError: (error) => {
+    onError: () => {
       speechPointerId = null
-      errorMsg.value = getSpeechErrorMessage(error)
+      errorMsg.value = USER_ERROR_MESSAGE
     },
   }).finally(() => {
     if (!speech.isStarting.value && !speech.isRecording.value) {
@@ -912,16 +919,6 @@ function finishSpeechInput(text: string): void {
   }
   question.value = recognizedText
   speech.clearTranscript()
-}
-
-function getSpeechErrorMessage(error: string): string {
-  if (error.includes('Permission') || error.includes('NotAllowed')) {
-    return '浏览器未允许使用麦克风，请检查权限设置'
-  }
-  if (error.includes('uploaded WAV')) {
-    return '录音格式不符合要求，请重试'
-  }
-  return error || '语音输入失败，请重试'
 }
 
 // 语音播报：播放/停止
@@ -1197,7 +1194,7 @@ async function activateEmbedSession(token: string): Promise<void> {
     embedSessionReady.value = false
     embedAuthExpired.value = true
     clearEmbedRenewTimer()
-    errorMsg.value = '鉴权失败，请重新打开营销智能体'
+    errorMsg.value = USER_ERROR_MESSAGE
     postEmbedMessage('AGENTHUB_AUTH_REQUIRED')
   } finally {
     embedExchangeInFlight = false
@@ -1256,7 +1253,7 @@ async function send() {
   if (!isEmbedMode.value) {
     const sessionReady = await auth.ensureFreshSessionForChat()
     if (!sessionReady) {
-      errorMsg.value = '登录已失效，请重新登录'
+      errorMsg.value = USER_ERROR_MESSAGE
       router.push('/login')
       return
     }
@@ -1335,20 +1332,20 @@ async function send() {
         embedSessionReady.value = false
         embedAuthExpired.value = true
         clearEmbedRenewTimer()
-        errorMsg.value = '鉴权已失效，正在重新授权，请稍后重试'
+        errorMsg.value = USER_ERROR_MESSAGE
         requestEmbedToken('unauthorized')
       } else {
         // token 过期或无效，清理登录态并跳转
         auth.clearSession()
-        errorMsg.value = '登录已失效，请重新登录'
+        errorMsg.value = USER_ERROR_MESSAGE
         router.push('/login')
       }
     } else if (e.status === 403) {
-      errorMsg.value = `权限不足（403）：${e.message}`
+      errorMsg.value = USER_ERROR_MESSAGE
     } else if (e.status === 503) {
-      errorMsg.value = '服务未就绪（503）：Agent 运行时未配置，请联系管理员。'
+      errorMsg.value = USER_ERROR_MESSAGE
     } else {
-      errorMsg.value = `调用失败：${e.message || '未知错误'}`
+      errorMsg.value = USER_ERROR_MESSAGE
     }
   } finally {
     assistantMsg.isStreaming = false
