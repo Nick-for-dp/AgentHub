@@ -144,22 +144,6 @@ async def chat(
         def _latency_ms() -> int:
             return int((perf_counter() - started_at) * 1000)
 
-        def _finish_message(status: ConversationMessageStatus) -> None:
-            """更新 assistant 消息最终状态（仅登录用户有产品会话时）。"""
-            if assistant_message is not None:
-                finish = handler.build_finish(status=InvocationStatus.SUCCEEDED.name)
-                conversation_service.update_message(
-                    assistant_message,
-                    ConversationMessageUpdate(
-                        content=finish.output.get("answer", ""),
-                        thought=None,
-                        steps=[],
-                        provider_message_id=handler._provider_message_id,
-                        invocation_record_id=record.id,
-                        status=status,
-                    ),
-                )
-
         try:
             if platform_conversation is not None:
                 yield f"data: {json.dumps({'conversation_id': platform_conversation.id}, ensure_ascii=False)}\n\n"

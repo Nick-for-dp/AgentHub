@@ -207,6 +207,10 @@ class ConversationService:
         commit: bool = True,
     ) -> ConversationMessage:
         update_data = payload.model_dump(exclude_unset=True)
+        # 显式传入 steps=None 归一为空列表：steps 恒为列表，禁止 NULL 落库，
+        # 否则后续 ConversationMessageRead 校验会失败导致读取接口 500。
+        if "steps" in update_data and update_data["steps"] is None:
+            update_data["steps"] = []
         for field, value in update_data.items():
             setattr(message, field, value)
         self.repository.save_message(message)

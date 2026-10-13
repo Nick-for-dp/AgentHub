@@ -332,6 +332,12 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
 
 const USER_ERROR_MESSAGE = '抱歉，出错了'
 
+/** 提取 axios 错误的 HTTP 状态码；非 HTTP 层错误（网络断开等）返回 null。 */
+function getHttpStatus(error: unknown): number | null {
+  const status = (error as { response?: { status?: number } })?.response?.status
+  return typeof status === 'number' ? status : null
+}
+
 function renderMarkdown(text: string): string {
   if (!text) return ''
   const rawHtml = marked(text) as string
@@ -689,14 +695,27 @@ async function restoreCurrentConversation(): Promise<void> {
   try {
     const routeConversationId = router.currentRoute.value.query.conversation_id
     const requestedId = typeof routeConversationId === 'string' ? routeConversationId : null
-    let currentState = requestedId ? null : await getCurrentConversation(agentCode.value)
-    let current = requestedId ? await getConversation(requestedId) : currentState?.conversation
-    let storedMessages = requestedId
-      ? await getConversationMessages(requestedId)
-      : currentState?.messages ?? []
+    let current: Conversation | null = null
+    let storedMessages: ConversationMessage[] = []
+    if (requestedId) {
+      try {
+        current = await getConversation(requestedId)
+        storedMessages = await getConversationMessages(requestedId)
+      } catch (err) {
+        // URL 残留已删除/不存在的会话 ID 时静默回退，与后端 ensure_active_conversation
+        // 的失效 ID 回退契约保持一致；其余错误（403、网络错误等）继续交给外层兜底。
+        if (getHttpStatus(err) !== 404) throw err
+        syncConversationUrl(null)
+      }
+    }
+    if (!current) {
+      const currentState = await getCurrentConversation(agentCode.value)
+      current = currentState.conversation
+      storedMessages = currentState.messages
+    }
     if (current && current.agent_code !== agentCode.value) {
       syncConversationUrl(null)
-      currentState = await getCurrentConversation(agentCode.value)
+      const currentState = await getCurrentConversation(agentCode.value)
       current = currentState.conversation
       storedMessages = currentState.messages
     }
@@ -708,8 +727,15 @@ async function restoreCurrentConversation(): Promise<void> {
     expandedSteps.value = {}
     syncConversationUrl(conversationId.value)
     await scrollBottom()
-  } catch {
-    errorMsg.value = USER_ERROR_MESSAGE
+  } catch (err) {
+    if (getHttpStatus(err) === 401 && !isEmbedMode.value) {
+      // 登录态过期：与 send() 对齐，清理失效登录态并跳转登录页
+      auth.clearSession()
+      errorMsg.value = USER_ERROR_MESSAGE
+      router.push('/login')
+    } else {
+      errorMsg.value = USER_ERROR_MESSAGE
+    }
   } finally {
     restoringConversation.value = false
   }

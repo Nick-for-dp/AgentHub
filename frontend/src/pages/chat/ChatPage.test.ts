@@ -368,4 +368,59 @@ describe('ChatPage', () => {
     expect(wrapper.text()).not.toContain('会话已过期')
     wrapper.unmount()
   })
+
+  it('falls back to the current conversation when the URL conversation is missing', async () => {
+    mocks.authState.currentUser = { name: '测试用户' }
+    mocks.authState.isLoggedIn = true
+    mocks.currentRoute.value = { meta: {}, query: { conversation_id: 'deleted-conversation' } }
+    mocks.getConversation.mockRejectedValue({ response: { status: 404 } })
+    mocks.getCurrentConversation.mockResolvedValue({
+      conversation: storedConversation('conversation-2'),
+      messages: [storedAssistantMessage('message-1', [])],
+    })
+
+    const wrapper = mountChatPage()
+    await flushPromises()
+
+    expect(mocks.getConversationMessages).not.toHaveBeenCalled()
+    expect(mocks.replace).toHaveBeenCalledWith({ query: {} })
+    expect(mocks.getCurrentConversation).toHaveBeenCalledWith('qa')
+    expect(wrapper.find('.error-message').exists()).toBe(false)
+    expect(wrapper.text()).toContain('这是历史回答')
+    wrapper.unmount()
+  })
+
+  it('enters the empty conversation state when no fallback conversation exists', async () => {
+    mocks.authState.currentUser = { name: '测试用户' }
+    mocks.authState.isLoggedIn = true
+    mocks.currentRoute.value = { meta: {}, query: { conversation_id: 'deleted-conversation' } }
+    mocks.getConversation.mockRejectedValue({ response: { status: 404 } })
+    mocks.getCurrentConversation.mockResolvedValue({
+      conversation: null,
+      messages: [],
+    })
+
+    const wrapper = mountChatPage()
+    await flushPromises()
+
+    expect(mocks.replace).toHaveBeenCalledWith({ query: {} })
+    expect(wrapper.find('.welcome-banner').exists()).toBe(true)
+    expect(wrapper.find('.error-message').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('clears the session and redirects when restore is unauthorized', async () => {
+    mocks.authState.currentUser = { name: '测试用户' }
+    mocks.authState.isLoggedIn = true
+    mocks.currentRoute.value = { meta: {}, query: { conversation_id: 'conversation-1' } }
+    mocks.getConversation.mockRejectedValue({ response: { status: 401 } })
+
+    const wrapper = mountChatPage()
+    await flushPromises()
+
+    expect(wrapper.find('.error-message').text()).toBe('抱歉，出错了')
+    expect(mocks.clearSession).toHaveBeenCalledTimes(1)
+    expect(mocks.push).toHaveBeenCalledWith('/login')
+    wrapper.unmount()
+  })
 })
